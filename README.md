@@ -53,7 +53,7 @@ A real-time **Personal Protective Equipment (PPE) Detection** desktop applicatio
 
 4.  **Download Model Weights**
     *   Due to file size limits, the trained model `epoch31.pt` is not included in this repo.
-    *   [git push -u origin main](#) 
+    *   [https://drive.google.com/file/d/11R8K0ehtvpbYZ23l5lUBiH1Lvx94j9zH/view?usp=sharing](#) 
     *   Place the file in the root directory of the project.
 
 ## 💻 Usage
