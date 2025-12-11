@@ -1,0 +1,17 @@
+opencv-python
+torch
+torchvision
+numpy
+ultralytics
+boxmot
+pandas
+matplotlib
+scikit-learn
+scipy
+pillow
+pyyaml
+requests
+tqdm
+psutil
+pyqt5
+lapx
