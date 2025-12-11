@@ -2,6 +2,11 @@
 
 A real-time **Personal Protective Equipment (PPE) Detection** desktop application built with **Python**, **YOLOv8**, **StrongSORT**, and **PyQt5**. This system is designed to monitor construction sites and industrial environments to ensure safety compliance by detecting workers and their safety gear (helmets, vests, etc.).
 
+## 👥 Authors
+
+*   **Muhammad Imran** - *Frontend Development & Integration*
+*   **Hamza Ramzan** - *Model Training & Backend Logic*
+
 ## 🌟 Features
 
 *   **Real-time Detection**: Detects Persons, Helmets, Vests, and other PPE classes using a custom-trained YOLOv8 model.
@@ -48,7 +53,7 @@ A real-time **Personal Protective Equipment (PPE) Detection** desktop applicatio
 
 4.  **Download Model Weights**
     *   Due to file size limits, the trained model `epoch31.pt` is not included in this repo.
-    *   [Download epoch31.pt here](#) (Add your Google Drive link here)
+    *   [git push -u origin main](#) 
     *   Place the file in the root directory of the project.
 
 ## 💻 Usage
@@ -75,6 +80,7 @@ PPE-Detection/
 ├── epoch31.pt          # YOLOv8 Model Weights (External Download)
 └── ...
 ```
+
 
 ## 🤝 Contributing
 
