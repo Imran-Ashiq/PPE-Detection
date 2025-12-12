@@ -2,13 +2,16 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QComboBox, 
                              QStackedWidget, QFileDialog, QFrame, QScrollArea,
-                             QSizePolicy, QGridLayout)
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal
+                             QSizePolicy, QGridLayout,QLineEdit)
+from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal,QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QImage, QPixmap
 import cv2
 import numpy as np
 from datetime import datetime
 from objectTracking import YOLODetector, ObjectTracker
+import threading
+import time
+import traceback
 
 # --- Color Palette & Styles ---
 BACKGROUND_COLOR = "#111827"  # Dark background
@@ -17,8 +20,12 @@ PRIMARY_COLOR = "#0ea5e9"     # Bright Blue
 TEXT_COLOR = "#f3f4f6"        # White-ish
 SECONDARY_TEXT = "#9ca3af"    # Grey
 DANGER_COLOR = "#ef4444"      # Red
-
+ACTIVE_COLOR = "#EF4444"      # Red
+HOVER_COLOR = "#2563EB"       # Darker blue for hover
 STYLESHEET = f"""
+    
+    
+    
     QMainWindow {{
         background-color: {BACKGROUND_COLOR};
     }}
@@ -98,144 +105,246 @@ STYLESHEET = f"""
     }}
 """
 
+
+
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     log_signal = pyqtSignal(str)
 
-    def __init__(self, source=0, model_path="epoch31.pt"):
+    def __init__(self, source=0, model_path="best.pt", ui_label=None):
         super().__init__()
         self.source = source
-        self.running = True
-        self.mode = "stream"
         self.model_path = model_path
-        self.detector = None
-        self.tracker = None
-        self.writer = None
-        self.frame_count = 0
+        self.ui_label = ui_label
+        self.running = True
+        self._updating = False
+        self.backendUI = None
 
-    def set_mode(self, mode):
-        self.mode = mode
-        if mode == "detection":
-            if self.detector is None:
-                 self.detector = YOLODetector(self.model_path)
-        elif mode in ["tracking", "full_monitor"]:
-            if self.detector is None:
-                self.detector = YOLODetector(self.model_path)
-            if self.tracker is None:
-                self.tracker = ObjectTracker()
-        
-        if mode != "full_monitor" and self.writer:
-            self.writer.release()
-            self.writer = None
+        # thread that will run backendUI.run()
+        self._backend_run_thread = None
+        self._backend_ready_event = threading.Event()
+
+        # store pending mode requests from UI before backend is ready
+        self._pending_mode = None
+
+    def _start_backend_run_thread(self):
+        """Start backendUI.run() inside a standard Python thread (daemon)."""
+        def target():
+            try:
+                # backendUI.run() may block forever; it runs in this separate thread
+                self.backendUI.run()
+            except Exception as e:
+                # emit log and print trace to console for debugging
+                self.log_signal.emit(f"❌ backend run error: {e}")
+                traceback.print_exc()
+            finally:
+                # mark backend as finished
+                self._backend_ready_event.clear()
+
+        self._backend_run_thread = threading.Thread(target=target, daemon=True)
+        self._backend_run_thread.start()
 
     def run(self):
-        cap = cv2.VideoCapture(self.source)
-        while self.running:
-            ret, frame = cap.read()
-            if ret:
-                self.frame_count += 1
-                if self.mode == "detection" and self.detector:
-                    results = self.detector.predict(frame)
-                    for result in results:
-                        for box in result.boxes:
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            conf = float(box.conf[0])
-                            cls = int(box.cls[0])
-                            label = self.detector.model.names[cls]
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                            cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        """Qt thread main — create backend, start its run() in a Python thread,
+           then remain alive until stopped. Frames arrive via on_frame_from_backend.
+        """
+        try:
+            from objectTracking import UI
+        except Exception as e:
+            self.log_signal.emit(f"❌ import error: {e}")
+            return
 
-                elif self.mode in ["tracking", "full_monitor"] and self.detector and self.tracker:
-                    results = self.detector.predict(frame)
-                    
-                    xywh_bboxs__15, confs__15, class_ids__15 = [], [], []
-                    detections_to_draw = []
-                    
-                    for result in results:
-                        for box in result.boxes:
-                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                            w, h = abs(x2 - x1), abs(y2 - y1)
-                            conf = float(box.conf[0])
-                            cls = int(box.cls[0])
-                            label = self.detector.model.names[cls]
-                            
-                            detections_to_draw.append((x1, y1, x2, y2, conf, cls, label))
-                            
-                            # Assuming class 11 is person as per original code
-                            if cls == 11:
-                                xywh_bboxs__15.append([cx, cy, w, h])
-                                confs__15.append(conf)
-                                class_ids__15.append(cls)
-                    
-                    # Run Tracker
-                    outputs_track__15 = []
-                    if len(xywh_bboxs__15) > 0:
-                        detections = []
-                        for (cx, cy, w, h), conf, cls in zip(xywh_bboxs__15, confs__15, class_ids__15):
-                            x1_t = int(cx - w / 2)
-                            y1_t = int(cy - h / 2)
-                            x2_t = int(cx + w / 2)
-                            y2_t = int(cy + h / 2)
-                            detections.append([x1_t, y1_t, x2_t, y2_t, conf, cls])
-                        detections = np.array(detections)
-                        outputs_track__15 = self.tracker.track(detections, frame)
-                    
-                    # Draw Tracks
-                    if len(outputs_track__15) > 0:
-                        for t in outputs_track__15:
-                            x1, y1, x2, y2, tid, cls = t[:6].astype(int)
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (225, 200, 0), 2)
-                            cv2.putText(frame, f"Person {tid}", (x1, max(0, y1-5)), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 200, 0), 3)
-                            
-                    # Draw other detections
-                    for (x1, y1, x2, y2, conf, cls, label) in detections_to_draw:
-                        if label.lower() == "person": continue
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(frame, f"{label}", (x1, y1 - 5), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
-
-                    # Full Monitor Extras (Save & Log)
-                    if self.mode == "full_monitor":
-                        # Save
-                        if self.writer is None:
-                            h, w = frame.shape[:2]
-                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                            filename = f'recording_{datetime.now().strftime("%Y%m%d_%H%M%S")}.mp4'
-                            self.writer = cv2.VideoWriter(filename, fourcc, 20.0, (w, h))
-                            self.log_signal.emit(f"🔴 Recording started: {filename}")
-                        self.writer.write(frame)
-                        
-                        # Log (Sampled)
-                        if self.frame_count % 30 == 0:
-                            person_count = len(outputs_track__15)
-                            ts = datetime.now().strftime("%H:%M:%S")
-                            self.log_signal.emit(f"[{ts}] Tracking {person_count} Persons")
-
-                rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_image.shape
-                bytes_per_line = ch * w
-                convert_to_qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                # Scale to fit the label, keeping aspect ratio
-                p = convert_to_qt_format.scaled(1000, 600, Qt.KeepAspectRatio)
-                self.change_pixmap_signal.emit(p)
-            else:
-                # Loop video if it's a file
-                if isinstance(self.source, str): 
-                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Try to instantiate backend (with retry for network sources)
+        connected = False
+        while not connected and self.running:
+            try:
+                self.backendUI = UI(source=self.source, model_path=self.model_path)
+                # tell backend to call our method when frames are ready
+                self.backendUI.backend.frame_callback = self.on_frame_from_backend
+                connected = True
+                self._backend_ready_event.set()
+            except Exception as e:
+                self.log_signal.emit(f"❌ Failed to Connect With The Camera Source:\n {e}")
+                traceback.print_exc()
+                # retry only for network-like sources
+                if isinstance(self.source, str) and ("http" in self.source.lower() or "rtsp" in self.source.lower()):
+                    time.sleep(1.0)
+                    continue
                 else:
-                    break
-        cap.release()
+                    return
+
+        if not self.running:
+            # user requested stop while connecting
+            try:
+                if self.backendUI:
+                    self.backendUI.stop_all_modes()
+            except Exception:
+                pass
+            return
+
+        self.log_signal.emit(f"✅ Backend instantiated for source: {self.source}")
+
+        # Apply any pending mode (requested by UI before backend ready)
+        if self._pending_mode:
+            try:
+                self.backendUI.setMode(self._pending_mode)
+                self._pending_mode = None
+            except Exception:
+                pass
+
+        # Start backend.run() inside a normal Python thread so it doesn't block Qt thread control flow.
+        try:
+            self._start_backend_run_thread()
+        except Exception as e:
+            self.log_signal.emit(f"❌ Failed to start backend thread: {e}")
+            traceback.print_exc()
+            return
+
+        # Keep this QThread alive until told to stop. Backend pushes frames to on_frame_from_backend.
+        try:
+            while self.running:
+                # Sleep small amount to stay responsive to stop() signal
+                time.sleep(0.05)
+        except Exception as e:
+            self.log_signal.emit(f"❌ Error in VideoThread main loop: {e}")
+            traceback.print_exc()
+        finally:
+            # Clean up: ask backend to stop, wait for backend thread to finish (with timeout)
+            try:
+                if self.backendUI:
+                    try:
+                        self.backendUI.stop_all_modes()
+                    except Exception:
+                        pass
+                    # If backend has a stop() or similar, try it
+                    if hasattr(self.backendUI, "stop"):
+                        try:
+                            self.backendUI.stop()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # wait for backend run thread to exit (timeout to avoid hanging indefinitely)
+            if self._backend_run_thread and self._backend_run_thread.is_alive():
+                self.log_signal.emit("⏳ waiting for backend thread to finish...")
+                self._backend_run_thread.join(timeout=2.0)
+
+            self.log_signal.emit("🔌 VideoThread exiting cleanly.")
+
+    def on_frame_from_backend(self, frame):
+        """Frame callback called by the backend (frame is expected to be RGB numpy)."""
+        try:
+            if not self.running:
+                return
+            # guard against re-entrancy
+            if self._updating:
+                return
+            # some backends may give BGR — if you expect RGB ensure backend provides RGB.
+            # We assume backend gives RGB since your previous code used Format_RGB888.
+            if frame is None:
+                return
+
+            # Quick validation
+            if not hasattr(frame, "shape") or len(frame.shape) < 3:
+                return
+
+            self._updating = True
+            h, w, ch = frame.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+            # If ui_label does not exist or is hidden (e.g., during resize/minimize), do not emit
+            if self.ui_label is None or self.ui_label.isHidden():
+                return
+
+            # throttle frame emission to avoid flooding UI during resize (limit to ~20 FPS)
+            now = time.time()
+            if not hasattr(self, "_last_emit"):
+                self._last_emit = 0
+            if now - self._last_emit < (1.0 / 20.0):
+                return
+            self._last_emit = now
+
+            # scale image to label in this thread before emitting (QImage is safe to pass)
+            label_w = max(1, self.ui_label.width())
+            label_h = max(1, self.ui_label.height())
+            scaled_image = qt_image.scaled(label_w, label_h,
+                                          Qt.KeepAspectRatioByExpanding,
+                                          Qt.SmoothTransformation)
+
+            # emit to UI
+            try:
+                self.change_pixmap_signal.emit(scaled_image)
+            except Exception:
+                # disconnected signals or closed UI may raise — swallow safely
+                pass
+
+        except Exception as e:
+            # log full traceback to console and emit user-visible log
+            print("Exception in on_frame_from_backend():", e)
+            traceback.print_exc()
+            try:
+                self.log_signal.emit(f"Error processing frame: {e}")
+            except Exception:
+                pass
+        finally:
+            self._updating = False
+
+    def set_mode(self, mode):
+        # If backend exists, set mode immediately; otherwise store pending mode
+        try:
+            if self.backendUI:
+                try:
+                    self.backendUI.setMode(mode)
+                    self.log_signal.emit(f"Mode set to {mode}")
+                except Exception as e:
+                    self.log_signal.emit(f"Failed to set mode: {e}")
+            else:
+                self._pending_mode = mode
+        except Exception:
+            pass
 
     def stop(self):
+        """Stop the thread and the backend safely."""
         self.running = False
-        self.wait()
+
+        # disconnect signals on the Qt side to avoid deliveries to destroyed slots
+        try:
+            self.change_pixmap_signal.disconnect()
+        except Exception:
+            pass
+        try:
+            self.log_signal.disconnect()
+        except Exception:
+            pass
+
+        # Ask backend to stop if possible
+        try:
+            if self.backendUI:
+                try:
+                    self.backendUI.stop_all_modes()
+                except Exception:
+                    pass
+                if hasattr(self.backendUI, "stop"):
+                    try:
+                        self.backendUI.stop()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Wait for the QThread event loop to finish (caller will call wait())
+        # Backend run thread is joined in run() finalizer
+
 
 class ConnectionScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
         self.switch_callback = switch_callback
-        self.selected_source = "webcam" # or "video"
+        self.selected_source = "webcam"  # default
         self.video_path = None
+        self.ip_url = None
         self.init_ui()
 
     def init_ui(self):
@@ -250,7 +359,7 @@ class ConnectionScreen(QWidget):
         card_layout.setSpacing(20)
         card_layout.setContentsMargins(40, 40, 40, 40)
 
-        # Icon (Placeholder text for now)
+        # Icon
         icon_label = QLabel("📷")
         icon_label.setAlignment(Qt.AlignCenter)
         icon_label.setStyleSheet("font-size: 48px;")
@@ -262,28 +371,35 @@ class ConnectionScreen(QWidget):
         title.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(title)
 
+        # Subtitle
         subtitle = QLabel("Connect to a camera source to begin monitoring\nworkplace safety")
         subtitle.setObjectName("Subtitle")
         subtitle.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(subtitle)
 
-        # Tabs (Upload Video / System Webcam)
+        # Tabs
         tabs_layout = QHBoxLayout()
         self.btn_upload = QPushButton("Upload Video")
         self.btn_upload.setObjectName("TabButton")
         self.btn_upload.setCursor(Qt.PointingHandCursor)
         self.btn_upload.clicked.connect(lambda: self.set_tab("video"))
-        
+
         self.btn_webcam = QPushButton("System Webcam")
         self.btn_webcam.setObjectName("TabButton")
         self.btn_webcam.setCursor(Qt.PointingHandCursor)
         self.btn_webcam.clicked.connect(lambda: self.set_tab("webcam"))
-        
+
+        self.btn_ipcam = QPushButton("IP Camera")
+        self.btn_ipcam.setObjectName("TabButton")
+        self.btn_ipcam.setCursor(Qt.PointingHandCursor)
+        self.btn_ipcam.clicked.connect(lambda: self.set_tab("ip_camera"))
+
         tabs_layout.addWidget(self.btn_upload)
         tabs_layout.addWidget(self.btn_webcam)
+        tabs_layout.addWidget(self.btn_ipcam)
         card_layout.addLayout(tabs_layout)
 
-        # Input Area (Dynamic)
+        # Input Area
         self.input_area = QVBoxLayout()
         card_layout.addLayout(self.input_area)
 
@@ -295,62 +411,88 @@ class ConnectionScreen(QWidget):
         card_layout.addWidget(self.btn_activate)
 
         layout.addWidget(card)
-        
-        # Initialize with Webcam tab
+
+        # Initialize default tab
         self.set_tab("webcam")
 
     def set_tab(self, mode):
         self.selected_source = mode
-        
+
         # Update Tab Styles
         self.btn_upload.setProperty("active", mode == "video")
         self.btn_webcam.setProperty("active", mode == "webcam")
-        self.btn_upload.style().unpolish(self.btn_upload)
-        self.btn_upload.style().polish(self.btn_upload)
-        self.btn_webcam.style().unpolish(self.btn_webcam)
-        self.btn_webcam.style().polish(self.btn_webcam)
+        self.btn_ipcam.setProperty("active", mode == "ip_camera")
+        for btn in [self.btn_upload, self.btn_webcam, self.btn_ipcam]:
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
         # Clear Input Area
-        for i in reversed(range(self.input_area.count())): 
-            self.input_area.itemAt(i).widget().setParent(None)
+        for i in reversed(range(self.input_area.count())):
+            widget = self.input_area.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
 
         if mode == "webcam":
             lbl = QLabel("Select Camera")
             lbl.setObjectName("Subtitle")
             self.input_area.addWidget(lbl)
-            
+
             combo = QComboBox()
             combo.addItems(["Built-in Webcam", "External USB Camera"])
             self.input_area.addWidget(combo)
             self.btn_activate.setText("Activate Camera")
-            
+
         elif mode == "video":
             lbl = QLabel("Select Video File")
             lbl.setObjectName("Subtitle")
             self.input_area.addWidget(lbl)
-            
+
             self.file_btn = QPushButton("Browse File...")
             self.file_btn.clicked.connect(self.browse_file)
             self.input_area.addWidget(self.file_btn)
             self.btn_activate.setText("Load Video")
+
+        elif mode == "ip_camera":
+            lbl = QLabel("Enter IP Camera URL")
+            lbl.setObjectName("Subtitle")
+            self.input_area.addWidget(lbl)
+        
+            # Container frame for styling
+            input_container = QFrame()
+            input_container.setStyleSheet("background-color: black; border-radius: 8px;")
+            container_layout = QVBoxLayout(input_container)
+            container_layout.setContentsMargins(5, 5, 5, 5)
+        
+            # IP input field
+            self.ip_input = QLineEdit()
+            self.ip_input.setPlaceholderText("e.g., http://192.168.1.100:8080/video")
+            self.ip_input.setStyleSheet("color: white; background-color: black; border: 1px solid #374151; padding: 5px;")
+            container_layout.addWidget(self.ip_input)
+        
+            self.input_area.addWidget(input_container)
+            self.btn_activate.setText("Activate IP Camera")
 
     def browse_file(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', 'c:\\', "Video files (*.mp4 *.avi)")
         if fname:
             self.video_path = fname
             self.file_btn.setText(fname.split('/')[-1])
-
+   
     def handle_activate(self):
-        source = 0
+        source = None
         if self.selected_source == "video":
             if not self.video_path:
-                return 
+                return
             source = self.video_path
         elif self.selected_source == "webcam":
-            source = 0 # Default to 0 for webcam
-            
-        self.switch_callback(source)
+            source = 0  # Default webcam
+        elif self.selected_source == "ip_camera":
+            ip_url = self.ip_input.text().strip()
+            if not ip_url:
+                return
+            source = ip_url  # IP camera URL
 
+        self.switch_callback(source)
 
 class MonitorScreen(QWidget):
     def __init__(self, switch_callback):
@@ -361,19 +503,33 @@ class MonitorScreen(QWidget):
 
     def stop_stream(self):
         if self.thread:
-            self.thread.stop()
+            self.thread.running = False  # signal the thread to stop
+            self.thread.wait()           # wait for thread to finish safely
             self.thread = None
-        self.switch_callback()
+            self.switch_callback()
+
+
 
     def start_stream(self, source):
-        self.thread = VideoThread(source)
+        if self.thread:
+            self.disconnect_camera()  # ensures the old thread is stopped
+        self.thread = VideoThread(source, ui_label=self.video_frame)
         self.thread.change_pixmap_signal.connect(self.update_image)
         self.thread.log_signal.connect(self.append_log)
         self.thread.start()
 
-    def update_image(self, qt_img):
-        self.video_frame.setPixmap(QPixmap.fromImage(qt_img))
 
+    def update_image(self, qt_img):
+        # Always scale into a FIXED space (860x665)
+        fixed_width = 950
+        fixed_height = 540
+    
+        scaled = qt_img.scaled(fixed_width, fixed_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.video_frame.setPixmap(QPixmap.fromImage(scaled))
+
+
+
+    
     def append_log(self, message):
         lbl = QLabel(message)
         lbl.setStyleSheet(f"color: {SECONDARY_TEXT}; border-bottom: 1px solid #374151; padding: 5px;")
@@ -410,7 +566,7 @@ class MonitorScreen(QWidget):
         btn_disconnect.setObjectName("DangerButton")
         btn_disconnect.setCursor(Qt.PointingHandCursor)
         btn_disconnect.clicked.connect(self.stop_stream)
-
+        btn_disconnect.clicked.connect(self.disconnect_camera)
         header.addWidget(title)
         header.addStretch()
         header.addWidget(status_badge)
@@ -423,25 +579,76 @@ class MonitorScreen(QWidget):
         self.video_frame.setStyleSheet(f"background-color: black; border-radius: 12px; border: 2px solid #374151;")
         self.video_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         left_layout.addWidget(self.video_frame)
+        # --- Button Styles ---
+        self.active_style = (
+            "background-color: #DC2626; color: white; padding: 12px; border-radius: 6px;"
+        )  # Red Active Button
+        
+        self.default_detect_style = (
+            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px; border-radius: 6px;"
+        )
+        
+        self.default_track_style = (
+            f"background-color: {CARD_COLOR}; color: white; padding: 12px; border-radius: 6px;"
+        )
+        
+        self.default_full_style = (
+            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px; border-radius: 6px;"
+        )
 
         # Bottom Controls
         controls_layout = QHBoxLayout()
-        
-        btn_detect = QPushButton("▶ Start Detection")
-        btn_detect.setObjectName("PrimaryButton")
-        btn_detect.clicked.connect(lambda: self.set_mode("detection"))
-        
-        btn_track = QPushButton("◎ Start Tracking")
-        btn_track.setStyleSheet(f"background-color: {CARD_COLOR}; color: white; padding: 12px; border-radius: 6px;")
-        btn_track.clicked.connect(lambda: self.set_mode("tracking"))
-        
-        btn_full = QPushButton("💾 Full Monitor")
-        btn_full.setStyleSheet(f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px; border-radius: 6px;")
-        btn_full.clicked.connect(lambda: self.set_mode("full_monitor"))
+        # Detect Button
+        self.btn_detect = QPushButton("▶ Start Detection")
+        self.btn_detect.setObjectName("PrimaryButton")
+        self.btn_detect.setStyleSheet(self.default_detect_style)
+        '''self.btn_detect.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY_COLOR};
+                color: {TEXT_COLOR};
+                padding: 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {HOVER_COLOR};
+            }}
+        """)'''
+        self.btn_detect.clicked.connect(lambda: self.handle_mode("detection"))
+        # Track Button
+        self.btn_track = QPushButton("◎ Start Tracking")
+        self.btn_track.setStyleSheet(self.default_detect_style)
+        '''self.btn_track.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {CARD_COLOR};
+                color: {TEXT_COLOR};
+                padding: 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: #4B5563;
+            }}
+        """)'''
+        self.btn_track.clicked.connect(lambda: self.handle_mode("tracking"))
+        # Full Monitor Button
+        self.btn_full = QPushButton("💾 Full Monitor")
+        '''self.btn_full.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY_COLOR};
+                color: {TEXT_COLOR};
+                padding: 12px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {HOVER_COLOR};
+            }}
+        """)'''
+        self.btn_full.setStyleSheet(self.default_full_style)
+        self.btn_full.clicked.connect(lambda: self.handle_mode("full_monitor"))
 
-        controls_layout.addWidget(btn_detect)
-        controls_layout.addWidget(btn_track)
-        controls_layout.addWidget(btn_full)
+
+        controls_layout.addWidget(self.btn_detect)
+        controls_layout.addWidget(self.btn_track)
+        controls_layout.addWidget(self.btn_full)
         left_layout.addLayout(controls_layout)
 
         main_layout.addWidget(left_widget, stretch=3)
@@ -477,7 +684,133 @@ class MonitorScreen(QWidget):
         self.log_layout.addWidget(empty_state)
 
         main_layout.addWidget(sidebar, stretch=1)
+    
+    def handle_mode(self, mode):
+        """
+        Handles starting/stopping Detection, Tracking, Full Monitor.
+        Clicking an active (red) button stops the corresponding mode.
+        """
+        full_active = self.btn_full.styleSheet() == self.active_style
+        detect_active = self.btn_detect.styleSheet() == self.active_style
+        track_active = self.btn_track.styleSheet() == self.active_style
+    
+        # ----------------- DETECTION -----------------
+        if mode == "detection":
+            if full_active:
+                return  # Cannot stop detection while full monitor is active
+    
+            if detect_active:
+                # Stop detection
+                self.btn_detect.setStyleSheet(self.default_detect_style)
+                # Check if tracking is running
+                if track_active:
+                    self.thread.set_mode("tracking")  # Keep tracking running
+                else:
+                    self.thread.set_mode("idle")      # No detection or tracking
+                self.append_log("🛑 Detection stopped.")
+            else:
+                # Start detection only
+                self.reset_buttons()
+                self.btn_detect.setStyleSheet(self.active_style)
+                self.btn_detect.setEnabled(True)
+                self.btn_track.setEnabled(True)
+                self.btn_full.setEnabled(True)
+                self.thread.set_mode("detection")
+                self.append_log("▶ Detection started.")
+    
+        # ----------------- TRACKING -----------------
+        elif mode == "tracking":
+            if full_active:
+                return  # Cannot stop tracking while full monitor is active
+    
+            if track_active:
+                # Stop tracking only, detection may continue
+                self.btn_track.setStyleSheet(self.default_track_style)
+                if detect_active:
+                    self.thread.set_mode("detection")  # Go back to detection only
+                else:
+                    self.thread.set_mode("idle")      # Nothing running
+                self.append_log("🛑 Tracking stopped. Detection still running.")
+            else:
+                # Start tracking → detection is required automatically
+                self.btn_detect.setStyleSheet(self.active_style)
+                self.btn_track.setStyleSheet(self.active_style)
+                self.btn_full.setStyleSheet(self.default_full_style)
+                self.btn_detect.setEnabled(True)
+                self.btn_track.setEnabled(True)
+                self.btn_full.setEnabled(True)
+                self.thread.set_mode("tracking")
+                self.append_log("◎ Tracking started.")
+    
+        # ----------------- FULL MONITOR -----------------
+        elif mode == "full_monitor":
+            if self.btn_full.styleSheet() == self.active_style:
+                # Stop everything
+                self.reset_buttons()
+                self.btn_detect.setEnabled(True)
+                self.btn_track.setEnabled(True)
+                self.btn_full.setEnabled(True)
+                self.thread.set_mode("idle")
+                self.append_log("🛑 Full Monitoring stopped.")
+            else:
+                # Start monitoring → requires detection + tracking
+                self.btn_detect.setStyleSheet(self.active_style)
+                self.btn_track.setStyleSheet(self.active_style)
+                self.btn_full.setStyleSheet(self.active_style)
+                self.btn_detect.setEnabled(False)
+                self.btn_track.setEnabled(False)
+                self.btn_full.setEnabled(True)
+                # Backend: tracking (detection is implicit)
+                self.thread.set_mode("tracking")
+                self.append_log("💾 Full Monitoring started.")
+    
+    def reset_buttons(self):
+        """Reset all buttons to default style and enable them."""
+        self.btn_detect.setStyleSheet(self.default_detect_style)
+        self.btn_track.setStyleSheet(self.default_track_style)
+        self.btn_full.setStyleSheet(self.default_full_style)
+        self.btn_detect.setEnabled(True)
+        self.btn_track.setEnabled(True)
+        self.btn_full.setEnabled(True)
 
+  
+    def disconnect_camera(self):
+        if self.thread:
+            try:
+                # Stop backend modes first
+                self.thread.backendUI.stop_all_modes()
+            except Exception as e:
+                print("Error stopping backend modes:", e)
+                import traceback; traceback.print_exc()
+    
+            # IMPORTANT: disconnect signals BEFORE killing the thread
+            try:
+                self.thread.change_pixmap_signal.disconnect()
+            except:
+                pass
+    
+            try:
+                self.thread.log_signal.disconnect()
+            except:
+                pass
+    
+            # Tell the thread to stop
+            self.thread.running = False
+    
+            # Wait for it to finish
+            self.thread.wait()
+    
+            # Fully remove thread reference
+            self.thread = None
+    
+        self.reset_buttons()
+
+    
+    def closeEvent(self, event):
+        if self.thread:
+            self.thread.stop()  # safely stop the VideoThread
+            self.thread = None
+        event.accept()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -501,7 +834,7 @@ class MainWindow(QMainWindow):
 
     def go_to_connection(self):
         self.stack.setCurrentWidget(self.connection_screen)
-
+    
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
