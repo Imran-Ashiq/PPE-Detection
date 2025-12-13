@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QComboBox, 
                              QStackedWidget, QFileDialog, QFrame, QScrollArea,
@@ -8,7 +10,7 @@ from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QImage, QPixmap
 import cv2
 import numpy as np
 from datetime import datetime
-from objectTracking import YOLODetector, ObjectTracker
+from objectTracking import Main_App as UI
 import threading
 import time
 import traceback
@@ -111,7 +113,7 @@ class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     log_signal = pyqtSignal(str)
 
-    def __init__(self, source=0, model_path="best.pt", ui_label=None):
+    def __init__(self, source=0, model_path="epoch31.pt", ui_label=None):
         super().__init__()
         self.source = source
         self.model_path = model_path
