@@ -2,16 +2,16 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QComboBox, 
                              QStackedWidget, QFileDialog, QFrame, QScrollArea,
-                             QSizePolicy, QGridLayout,QLineEdit)
+                             QSizePolicy, QGridLayout,QLineEdit,QCheckBox)
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal,QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QImage, QPixmap
 import cv2
 import numpy as np
 from datetime import datetime
-from objectTracking import YOLODetector, ObjectTracker
 import threading
 import time
 import traceback
+import objectTracking
 
 # --- Color Palette & Styles ---
 BACKGROUND_COLOR = "#111827"  # Dark background
@@ -110,8 +110,9 @@ STYLESHEET = f"""
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     log_signal = pyqtSignal(str)
+    model_loaded_signal = pyqtSignal(list)  # new signal to emit class names
 
-    def __init__(self, source=0, model_path="best.pt", ui_label=None):
+    def __init__(self, source=0, model_path="Local_2.pt", ui_label=None):
         super().__init__()
         self.source = source
         self.model_path = model_path
@@ -163,6 +164,12 @@ class VideoThread(QThread):
                 self.backendUI.backend.frame_callback = self.on_frame_from_backend
                 connected = True
                 self._backend_ready_event.set()
+                # Emit class names for UI
+                try:
+                    class_names = list(self.backendUI.backend.Detector.model.names.values())
+                    self.model_loaded_signal.emit(class_names)
+                except Exception as e:
+                    self.log_signal.emit(f"❌ Error emitting model classes: {e}")
             except Exception as e:
                 self.log_signal.emit(f"❌ Failed to Connect With The Camera Source:\n {e}")
                 traceback.print_exc()
@@ -231,7 +238,7 @@ class VideoThread(QThread):
                 self._backend_run_thread.join(timeout=2.0)
 
             self.log_signal.emit("🔌 VideoThread exiting cleanly.")
-
+    
     def on_frame_from_backend(self, frame):
         """Frame callback called by the backend (frame is expected to be RGB numpy)."""
         try:
@@ -337,11 +344,11 @@ class VideoThread(QThread):
         # Wait for the QThread event loop to finish (caller will call wait())
         # Backend run thread is joined in run() finalizer
 
-
 class ConnectionScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
         self.switch_callback = switch_callback
+        self.model_path = "best.pt"   # default model
         self.selected_source = "webcam"  # default
         self.video_path = None
         self.ip_url = None
@@ -402,6 +409,19 @@ class ConnectionScreen(QWidget):
         # Input Area
         self.input_area = QVBoxLayout()
         card_layout.addLayout(self.input_area)
+        # --- Model Selection ---
+        model_label = QLabel("Select Model")
+        model_label.setObjectName("Subtitle")
+        card_layout.addWidget(model_label)
+        
+        self.model_combo = QComboBox()
+        self.model_combo.addItems([
+            "Default Model (best.pt)",
+            "Custom Model..."
+        ])
+        self.model_combo.currentIndexChanged.connect(self.on_model_change)
+        card_layout.addWidget(self.model_combo)
+
 
         # Activate Button
         self.btn_activate = QPushButton("Activate Camera")
@@ -477,7 +497,7 @@ class ConnectionScreen(QWidget):
         if fname:
             self.video_path = fname
             self.file_btn.setText(fname.split('/')[-1])
-   
+    
     def handle_activate(self):
         source = None
         if self.selected_source == "video":
@@ -492,13 +512,47 @@ class ConnectionScreen(QWidget):
                 return
             source = ip_url  # IP camera URL
 
-        self.switch_callback(source)
+        #self.switch_callback(source)
+        self.switch_callback(source, self.model_path)
+
+
+    def on_model_change(self, index):
+        if index == 1:  # Custom Model
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select YOLO Model",
+                "",
+                "YOLO Model (*.pt)"
+            )
+            if file_path:
+                self.model_path = file_path
+                self.model_combo.setItemText(
+                    1, f"Custom: {file_path.split('/')[-1]}"
+                )
+            else:
+                # user canceled → revert to default
+                self.model_combo.setCurrentIndex(0)
+                self.model_path = "best.pt"
+        else:
+            self.model_path = "best.pt"
 
 class MonitorScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
         self.switch_callback = switch_callback
+        
         self.thread = None
+
+        # Checkbox container and layout
+        self.class_checkboxes = {}  # will hold QCheckBox objects
+        self.class_checkbox_container = QWidget()
+        self.class_layout = QVBoxLayout(self.class_checkbox_container)
+        self.class_layout.setContentsMargins(0, 0, 0, 0)
+        self.class_layout.setSpacing(5)
+
+        # will initialize after model loads
+        self.selected_class_handler = None 
+        # Initialize UI
         self.init_ui()
 
     def stop_stream(self):
@@ -508,16 +562,18 @@ class MonitorScreen(QWidget):
             self.thread = None
             self.switch_callback()
 
+    def get_selected_classes(self):
+        return [name for name, cb in self.class_checkboxes.items() if cb.isChecked()]
 
-
-    def start_stream(self, source):
+    def start_stream(self, source, model_path):
         if self.thread:
             self.disconnect_camera()  # ensures the old thread is stopped
-        self.thread = VideoThread(source, ui_label=self.video_frame)
+        #self.thread = VideoThread(source, ui_label=self.video_frame)
+        self.thread = VideoThread(source=source,model_path=model_path,ui_label=self.video_frame)
         self.thread.change_pixmap_signal.connect(self.update_image)
         self.thread.log_signal.connect(self.append_log)
+        self.thread.model_loaded_signal.connect(self.show_model_classes)
         self.thread.start()
-
 
     def update_image(self, qt_img):
         # Always scale into a FIXED space (860x665)
@@ -527,9 +583,6 @@ class MonitorScreen(QWidget):
         scaled = qt_img.scaled(fixed_width, fixed_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_frame.setPixmap(QPixmap.fromImage(scaled))
 
-
-
-    
     def append_log(self, message):
         lbl = QLabel(message)
         lbl.setStyleSheet(f"color: {SECONDARY_TEXT}; border-bottom: 1px solid #374151; padding: 5px;")
@@ -544,6 +597,38 @@ class MonitorScreen(QWidget):
         if self.thread:
             self.thread.set_mode(mode)
 
+    def show_model_classes(self, class_names):
+        print("📦 DEBUG: show_model_classes() called")
+        print("📦 thread:", self.thread)
+        print("📦 backendUI:", getattr(self.thread, "backendUI", None))
+        print("📦 backend.Detector:", getattr(self.thread.backendUI, "Detector", None))
+    
+        # Clear old checkboxes
+        for i in reversed(range(self.class_layout.count())):
+            widget = self.class_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+    
+        # Create new checkboxes
+        self.class_checkboxes = {}
+        for cls_name in class_names:
+            cb = QCheckBox(cls_name)
+            cb.setStyleSheet("color: white;")
+            cb.setChecked(cls_name.lower() == "person")  # default selection
+            self.class_layout.addWidget(cb)
+            self.class_checkboxes[cls_name] = cb
+    
+        # Only create SelectedClassesHandler if Detector exists
+        backend_detector = getattr(self.thread.backendUI.backend, "Detector", None)
+        if backend_detector is not None:
+            self.selected_class_handler = SelectedClassesHandler(
+                checkboxes=self.class_checkboxes,
+                backend_detector=backend_detector
+            )
+        else:
+            # Retry later or when backend.Detector becomes available
+            print("❌ Detector not ready yet — cannot create SelectedClassesHandler")
+   
     def init_ui(self):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -572,6 +657,7 @@ class MonitorScreen(QWidget):
         header.addWidget(status_badge)
         header.addWidget(btn_disconnect)
         left_layout.addLayout(header)
+        
 
         # Video Placeholder
         self.video_frame = QLabel("Video Stream Loading...")
@@ -645,6 +731,33 @@ class MonitorScreen(QWidget):
         self.btn_full.setStyleSheet(self.default_full_style)
         self.btn_full.clicked.connect(lambda: self.handle_mode("full_monitor"))
 
+        # --- Class Selection (Dynamic for loaded model) ---
+        self.class_selection_label = QLabel("Select classes to detect:")
+        self.class_selection_label.setStyleSheet("color: white; font-weight: bold;")
+        left_layout.addWidget(self.class_selection_label)
+        
+        # Container for checkboxes
+       # self.class_checkbox_container = QWidget()
+       # self.class_layout = QVBoxLayout(self.class_checkbox_container)
+       # self.class_layout.setContentsMargins(0, 0, 0, 0)
+        #self.class_layout.setSpacing(5)
+        # Dictionary to store QCheckBox widgets
+       # self.class_checkboxes = {}
+
+        
+        # --- Initialize the handler AFTER checkboxes exist ---
+        #self.selected_class_handler = SelectedClassesHandler(
+            #checkboxes=self.class_checkboxes,
+           # backend_detector=self.Detector)
+
+        # Scroll area to hold checkboxes (in case of many classes)
+        class_scroll = QScrollArea()
+        class_scroll.setWidgetResizable(True)
+        class_scroll.setWidget(self.class_checkbox_container)
+        class_scroll.setStyleSheet("background-color: black; border: 1px solid #374151;")
+        left_layout.addWidget(class_scroll)
+        main_layout.addWidget(left_widget, stretch=3)
+        
 
         controls_layout.addWidget(self.btn_detect)
         controls_layout.addWidget(self.btn_track)
@@ -773,7 +886,6 @@ class MonitorScreen(QWidget):
         self.btn_track.setEnabled(True)
         self.btn_full.setEnabled(True)
 
-  
     def disconnect_camera(self):
         if self.thread:
             try:
@@ -804,8 +916,19 @@ class MonitorScreen(QWidget):
             self.thread = None
     
         self.reset_buttons()
-
     
+    def get_selected_class_ids(self):
+        """
+        Convert selected checkbox names into YOLO class IDs.
+        """
+        if not self.thread or not self.thread.backendUI:
+            return []
+
+        selected_names = [name for name, cb in self.class_checkboxes.items() if cb.isChecked()]
+        model = self.thread.backendUI.Detector.model
+        selected_ids = [cls_id for cls_id, cls_name in model.names.items() if cls_name in selected_names]
+        return selected_ids
+
     def closeEvent(self, event):
         if self.thread:
             self.thread.stop()  # safely stop the VideoThread
@@ -824,17 +947,69 @@ class MainWindow(QMainWindow):
 
         self.connection_screen = ConnectionScreen(self.go_to_monitor)
         self.monitor_screen = MonitorScreen(self.go_to_connection)
+        
 
         self.stack.addWidget(self.connection_screen)
         self.stack.addWidget(self.monitor_screen)
 
-    def go_to_monitor(self, source):
-        self.monitor_screen.start_stream(source)
+    #def go_to_monitor(self, source):
+        #self.monitor_screen.start_stream(source)
+        #self.stack.setCurrentWidget(self.monitor_screen)
+
+    def go_to_monitor(self, source, model_path):
+        self.monitor_screen.start_stream(source, model_path)
         self.stack.setCurrentWidget(self.monitor_screen)
 
     def go_to_connection(self):
         self.stack.setCurrentWidget(self.connection_screen)
     
+
+class SelectedClassesHandler:
+    """
+    Handles dynamically sending selected class IDs to the backend.
+    Works with any number of checkboxes (model-agnostic).
+    """
+    def __init__(self, checkboxes, backend_detector):
+        """
+        checkboxes: dict of {class_name: QCheckBox}
+        backend_detector: YOLODetector instance
+        """
+        self.checkboxes = checkboxes
+        self.backend = backend_detector
+        self.prev_state = {name: cb.isChecked() for name, cb in self.checkboxes.items()}
+
+        # Connect signal with checkbox name
+        for name, cb in self.checkboxes.items():
+            cb.stateChanged.connect(lambda state, n=name: self.on_checkbox_changed(n, state))
+
+        # Send initial selection
+        self.send_selected_classes()
+
+    def on_checkbox_changed(self, name, state):
+        """Called instantly when any checkbox changes."""
+        print(f"🔘 Checkbox '{name}' is now {'checked' if state else 'unchecked'}")
+        self.send_selected_classes()
+    
+    def send_selected_classes(self):
+        selected_names = [
+            name for name, cb in self.checkboxes.items() if cb.isChecked()
+        ]
+    
+        detector = self.backend
+        if detector is None:
+            print("❌ Backend detector not initialized yet")
+            return
+    
+        # Convert names to IDs
+        selected_ids = [
+            cls_id for cls_id, cls_name in detector.model.names.items()
+            if cls_name in selected_names
+        ]
+    
+        # Send to backend detector
+        detector.update_selected_classes(selected_ids)
+    
+        print("📤 UI sent selected class IDs:", selected_ids)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
