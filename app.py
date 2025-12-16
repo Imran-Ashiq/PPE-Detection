@@ -112,7 +112,7 @@ class VideoThread(QThread):
     log_signal = pyqtSignal(str)
     model_loaded_signal = pyqtSignal(list)  # new signal to emit class names
 
-    def __init__(self, source=0, model_path="Local_2.pt", ui_label=None):
+    def __init__(self, source=0, model_path="epoch31.pt", ui_label=None):
         super().__init__()
         self.source = source
         self.model_path = model_path
@@ -348,7 +348,7 @@ class ConnectionScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
         self.switch_callback = switch_callback
-        self.model_path = "best.pt"   # default model
+        self.model_path = "epoch31.pt"   # default model
         self.selected_source = "webcam"  # default
         self.video_path = None
         self.ip_url = None
@@ -416,7 +416,7 @@ class ConnectionScreen(QWidget):
         
         self.model_combo = QComboBox()
         self.model_combo.addItems([
-            "Default Model (best.pt)",
+            "Default Model (epoch31.pt)",
             "Custom Model..."
         ])
         self.model_combo.currentIndexChanged.connect(self.on_model_change)
@@ -532,9 +532,9 @@ class ConnectionScreen(QWidget):
             else:
                 # user canceled → revert to default
                 self.model_combo.setCurrentIndex(0)
-                self.model_path = "best.pt"
+                self.model_path = "epoch31.pt"
         else:
-            self.model_path = "best.pt"
+            self.model_path = "epoch31.pt"
 
 class MonitorScreen(QWidget):
     def __init__(self, switch_callback):
