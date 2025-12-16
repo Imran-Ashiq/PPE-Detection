@@ -15,14 +15,8 @@ if not hasattr(np, 'float'):
 if not hasattr(np, 'int'):
     np.int = int
 
-
 class VideoLoader:
     def __init__(self, source):
-        """
-        source can be:
-        - int: webcam index (0, 1, etc.)
-        - str: video file path or IP camera URL
-        """
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             raise IOError(f"❌ Could not open video source: {source}")
@@ -45,9 +39,18 @@ class YOLODetector:
         self.model = YOLO(Model_path)
         self.confidence = confidence
         print("✅ YOLO model loaded")
-
+        self.person_class_ids = [
+            class_id for class_id, name in self.model.names.items()
+            if name.lower() == "person"
+        ]
+        self.selected_class_ids = set([0]) 
+    
+    def update_selected_classes(self, class_ids):
+        self.selected_class_ids = set(class_ids)
+        print(f"🔹 YOLODetector received selected class IDs: {self.selected_class_ids}")
+    
     def predict(self, frame):
-        return self.model.predict(frame, conf=self.confidence)
+        return self.model.predict(frame, conf=self.confidence) 
 
 class ObjectTracker:
     def __init__(self):
@@ -91,8 +94,7 @@ class Main_App:
         self.log_interval = 10  # seconds
         self.last_log_time = time.time()
         self.log_counts = defaultdict(int)  # count of each detected item in interval
-
-
+   
     def set_mode(self, mode):
         with self.mode_lock:
             if mode not in ["detection", "tracking", "idle"]:
@@ -164,7 +166,7 @@ class Main_App:
                         w, h = abs(x2 - x1), abs(y2 - y1)
                         conf = float(box.conf[0])
                         cls = int(box.cls[0])
-                        if cls == 11:  # Only track persons
+                        if cls in self.Detector.person_class_ids:  # Only track persons
                             xywh_bboxs.append([cx, cy, w, h])
                             confs.append(conf)
                             class_ids.append(cls)
@@ -206,8 +208,9 @@ class Main_App:
                 for result in results:
                     for box in result.boxes:
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        cls = int(box.cls[0])  # <--- defined here
                         label = self.Detector.model.names.get(int(box.cls[0]), f"cls{int(box.cls[0])}")
-                        if label.lower() != "person":
+                        if cls in self.Detector.selected_class_ids and cls not in self.Detector.person_class_ids:
                             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                             cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
 
@@ -246,7 +249,7 @@ class UI:
         self.Mode = None
         self.active_mode = None
         self.backend = Main_App(Video_path=source, Model_path=model_path, QueueSize=5)
-
+    
     def start_mode(self, mode):
         self.Mode = mode
         self.active_mode = mode
@@ -276,13 +279,9 @@ class UI:
         self.backend.set_mode(mode)  # forward mode to backend
 
     def run(self):
-        """Start backend processing"""
         self.backend.run()  # run the Main_App threads
-
+   
     def stop(self):
-        """Stop backend processing"""
         self.backend.running = False
         self.backend.Video.release()
-
-        """Start backend processing"""
         self.backend.run()  # run the Main_App threads
