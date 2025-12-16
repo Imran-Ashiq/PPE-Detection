@@ -245,7 +245,7 @@ class Main_App:
         print("✅ Backend exited cleanly.")
 
 class UI:
-    def __init__(self, source=0, model_path="Local_2.pt"):
+    def __init__(self, source=0, model_path="epoch31.pt"):
         self.Mode = None
         self.active_mode = None
         self.backend = Main_App(Video_path=source, Model_path=model_path, QueueSize=5)
