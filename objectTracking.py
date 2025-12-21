@@ -6,6 +6,8 @@ from ultralytics import YOLO
 from pathlib import Path
 from boxmot import StrongSort
 import queue
+import os
+import datetime
 import threading
 import time
 from collections import defaultdict
@@ -35,22 +37,25 @@ class VideoLoader:
         self.cap.release()
 
 class YOLODetector:
-    def __init__(self, Model_path, confidence=0.1):
+    def __init__(self, Model_path, confidence=0.3):
         self.model = YOLO(Model_path)
         self.confidence = confidence
+        self.save_enabled = False
+        self.output_dir = "Saved/monitor_outputs"
+        self.run_name = None
         print("✅ YOLO model loaded")
         self.person_class_ids = [
             class_id for class_id, name in self.model.names.items()
             if name.lower() == "person"
         ]
         self.selected_class_ids = set([0]) 
-    
-    def update_selected_classes(self, class_ids):
+          
+    def update_selected_classes_for_backend(self, class_ids):
         self.selected_class_ids = set(class_ids)
         print(f"🔹 YOLODetector received selected class IDs: {self.selected_class_ids}")
     
     def predict(self, frame):
-        return self.model.predict(frame, conf=self.confidence) 
+        return self.model.predict(frame,conf=self.confidence,save=self.save_enabled,project=self.output_dir if self.save_enabled else None,name=self.run_name,classes=list(self.selected_class_ids),verbose=False)
 
 class ObjectTracker:
     def __init__(self):
@@ -94,6 +99,11 @@ class Main_App:
         self.log_interval = 10  # seconds
         self.last_log_time = time.time()
         self.log_counts = defaultdict(int)  # count of each detected item in interval
+        # Options for saving
+        self.save_enabled = False
+        self.save_type = "frames"  # "frames" or "video"
+        self.save_folder = None
+        self.video_writer = None
    
     def set_mode(self, mode):
         with self.mode_lock:
@@ -187,6 +197,30 @@ class Main_App:
                 outputs_track = []
             self.track_queue.put((frame, outputs_track, results))
     
+    def set_save_options(self, enabled: bool, save_type=None, save_folder=None):
+
+        """
+        Controls saving detections as frames or video
+        save_type: "frames" | "video"
+        """
+        self.save_enabled = enabled
+        self.save_type = save_type
+        self.save_folder = save_folder
+    
+        # Stop saving
+        if not enabled:
+            if self.video_writer:
+                self.video_writer.release()
+                self.video_writer = None
+                print("🛑 VideoWriter released")
+            print("🛑 Saving disabled")
+            return
+        
+        # Start saving
+        if enabled:
+            print(f"💾 Saving enabled → type={save_type}, folder={save_folder}")
+    
+        
     def BoundingBox(self):
         while self.running:
             try:
@@ -213,11 +247,52 @@ class Main_App:
                         if cls in self.Detector.selected_class_ids and cls not in self.Detector.person_class_ids:
                             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                             cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_PLAIN, 1.5, (0, 255, 0), 2)
+                            
+
 
                 for t in outputs:
                     x1, y1, x2, y2, tid, cls = t[:6].astype(int)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (225, 200, 0), 2)
                     cv2.putText(frame, f"Person {tid}", (x1, max(0, y1-5)), cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 200, 0), 3)
+            # Save frames or video if enabled
+            # ----------------------------------------
+            # SAVE OUTPUT (Frames or Video)
+            # ----------------------------------------
+            if self.save_enabled:
+            
+                # ----- SAVE FRAMES -----
+                if self.save_type == "frames":
+                    from datetime import datetime
+                    import os
+            
+                    ts = datetime.now().strftime("%H-%M-%S-%f")[:-3]
+                    frame_path = os.path.join(self.save_folder, f"{ts}.jpg")
+                    cv2.imwrite(frame_path, frame)
+            
+                # ----- SAVE VIDEO -----
+                elif self.save_type == "video":
+            
+                    # Initialize VideoWriter ON FIRST FRAME
+                    if self.video_writer is None:
+                        import os
+            
+                        h, w, _ = frame.shape
+                        video_path = os.path.join(self.save_folder, "detection_output.mp4")
+            
+                        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                        self.video_writer = cv2.VideoWriter(
+                            video_path, fourcc, 30, (w, h)
+                        )
+            
+                        if not self.video_writer.isOpened():
+                            print("❌ Failed to open VideoWriter")
+                            self.video_writer = None
+                        else:
+                            print(f"🎥 VideoWriter started ({w}x{h})")
+            
+                    # Write frame (MUST be BGR)
+                    if self.video_writer:
+                        self.video_writer.write(frame)
 
             cv2.putText(frame, f"FPS: {int(fps)}", (0, 30), cv2.FONT_HERSHEY_PLAIN, 2, (0, 225, 0), 5)
             cv2.putText(frame, f"Frame: {self.Frame_Count}", (0, 60), cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 0), 5)
@@ -227,6 +302,7 @@ class Main_App:
                 self.frame_callback(rgb_frame)
                 time.sleep(0.01)
     
+   
     def run(self):
         threads = [
             threading.Thread(target=self.VideoFrameReader, daemon=True),
@@ -281,6 +357,10 @@ class UI:
     def run(self):
         self.backend.run()  # run the Main_App threads
    
+    def set_save_enabled(self, enabled: bool):
+        if self.backend:
+            self.backend.set_save_options(enabled)
+    
     def stop(self):
         self.backend.running = False
         self.backend.Video.release()
