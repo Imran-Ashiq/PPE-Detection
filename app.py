@@ -3,7 +3,7 @@ import threading
 import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QComboBox, 
-                             QStackedWidget, QFileDialog, QFrame, QScrollArea,
+                             QStackedWidget, QFileDialog,QInputDialog, QFrame, QScrollArea,
                              QSizePolicy, QGridLayout,QLineEdit,QCheckBox)
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal,QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QImage, QPixmap
@@ -14,6 +14,8 @@ from objectTracking import YOLODetector, ObjectTracker
 import threading
 import time
 import traceback
+import os
+import datetime
 import objectTracking
 
 # --- Color Palette & Styles ---
@@ -109,7 +111,6 @@ STYLESHEET = f"""
 """
 
 
-
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     log_signal = pyqtSignal(str)
@@ -135,7 +136,6 @@ class VideoThread(QThread):
         """Start backendUI.run() inside a standard Python thread (daemon)."""
         def target():
             try:
-                # backendUI.run() may block forever; it runs in this separate thread
                 self.backendUI.run()
             except Exception as e:
                 # emit log and print trace to console for debugging
@@ -149,9 +149,7 @@ class VideoThread(QThread):
         self._backend_run_thread.start()
 
     def run(self):
-        """Qt thread main — create backend, start its run() in a Python thread,
-           then remain alive until stopped. Frames arrive via on_frame_from_backend.
-        """
+        """Main thread loop: instantiate backend, start backend run thread, handle frame callbacks."""
         try:
             from objectTracking import UI
         except Exception as e:
@@ -164,7 +162,7 @@ class VideoThread(QThread):
             try:
                 self.backendUI = UI(source=self.source, model_path=self.model_path)
                 # tell backend to call our method when frames are ready
-                self.backendUI.backend.frame_callback = self.on_frame_from_backend
+                self.backendUI.backend.frame_callback = self.get_frames_from_backend
                 connected = True
                 self._backend_ready_event.set()
                 # Emit class names for UI
@@ -242,7 +240,7 @@ class VideoThread(QThread):
 
             self.log_signal.emit("🔌 VideoThread exiting cleanly.")
     
-    def on_frame_from_backend(self, frame):
+    def get_frames_from_backend(self, frame):
         """Frame callback called by the backend (frame is expected to be RGB numpy)."""
         try:
             if not self.running:
@@ -315,6 +313,12 @@ class VideoThread(QThread):
         except Exception:
             pass
 
+    def set_save_enabled(self, enabled: bool):
+        if hasattr(self.backendUI, "backend") and hasattr(self.backendUI.backend, "Detector"):
+            self.backendUI.backend.set_save_enabled(enabled)
+        else:
+            print("❌ Backend or Detector not initialized yet")
+    
     def stop(self):
         """Stop the thread and the backend safely."""
         self.running = False
@@ -422,7 +426,7 @@ class ConnectionScreen(QWidget):
             "Default Model (epoch31.pt)",
             "Custom Model..."
         ])
-        self.model_combo.currentIndexChanged.connect(self.on_model_change)
+        self.model_combo.currentIndexChanged.connect(self.select_custom_model)
         card_layout.addWidget(self.model_combo)
 
 
@@ -518,8 +522,7 @@ class ConnectionScreen(QWidget):
         #self.switch_callback(source)
         self.switch_callback(source, self.model_path)
 
-
-    def on_model_change(self, index):
+    def select_custom_model(self, index):
         if index == 1:  # Custom Model
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -550,6 +553,7 @@ class MonitorScreen(QWidget):
         self.class_checkboxes = {}  # will hold QCheckBox objects
         self.class_checkbox_container = QWidget()
         self.class_layout = QVBoxLayout(self.class_checkbox_container)
+        
         self.class_layout.setContentsMargins(0, 0, 0, 0)
         self.class_layout.setSpacing(5)
 
@@ -557,28 +561,55 @@ class MonitorScreen(QWidget):
         self.selected_class_handler = None 
         # Initialize UI
         self.init_ui()
+        self.is_saving = False
 
     def stop_stream(self):
         if self.thread:
+            self.thread.backendUI.backend.set_save_options(False)
+            self.append_log("🔌 Camera disconnected. Saving stopped.")
             self.thread.running = False  # signal the thread to stop
             self.thread.wait()           # wait for thread to finish safely
             self.thread = None
             self.switch_callback()
 
-    def get_selected_classes(self):
-        return [name for name, cb in self.class_checkboxes.items() if cb.isChecked()]
+    def get_selected_classes_ids(self, return_type="id"):
+        """
+        Get selected classes from checkboxes.
+    
+        Args:
+            return_type (str): "id" to return YOLO class IDs,
+                               "name" to return class names.
+        
+        Returns:
+            list: Selected class IDs or names.
+        """
+        if not self.thread or not getattr(self.thread, "backendUI", None):
+            return []
+    
+        # Get all selected names
+        selected_names = [name for name, cb in self.class_checkboxes.items() if cb.isChecked()]
+    
+        if return_type.lower() == "name":
+            return selected_names
+    
+        # Default: return class IDs
+        model = self.thread.backendUI.Detector.model
+        selected_ids = [cls_id for cls_id, cls_name in model.names.items() if cls_name in selected_names]
+    
+        print("📤 UI sending selected class IDs:", selected_ids)
+        return selected_ids
 
     def start_stream(self, source, model_path):
         if self.thread:
-            self.disconnect_camera()  # ensures the old thread is stopped
+            self.disconnect_connection()  # ensures the old thread is stopped
         #self.thread = VideoThread(source, ui_label=self.video_frame)
         self.thread = VideoThread(source=source,model_path=model_path,ui_label=self.video_frame)
-        self.thread.change_pixmap_signal.connect(self.update_image)
+        self.thread.change_pixmap_signal.connect(self.update_frames_on_monitor_screen)
         self.thread.log_signal.connect(self.append_log)
         self.thread.model_loaded_signal.connect(self.show_model_classes)
         self.thread.start()
-
-    def update_image(self, qt_img):
+        
+    def update_frames_on_monitor_screen(self, qt_img):
         # Always scale into a FIXED space (860x665)
         fixed_width = 950
         fixed_height = 540
@@ -604,34 +635,49 @@ class MonitorScreen(QWidget):
         print("📦 DEBUG: show_model_classes() called")
         print("📦 thread:", self.thread)
         print("📦 backendUI:", getattr(self.thread, "backendUI", None))
-        print("📦 backend.Detector:", getattr(self.thread.backendUI, "Detector", None))
     
-        # Clear old checkboxes
-        for i in reversed(range(self.class_layout.count())):
-            widget = self.class_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
+        # 🔥 SAFELY remove old container (if exists)
+        if hasattr(self, "class_checkbox_container") and self.class_checkbox_container:
+            self.class_checkbox_container.deleteLater()
     
-        # Create new checkboxes
+        # 🔹 Recreate container + grid layout
+        self.class_checkbox_container = QWidget()
+        self.class_grid_layout = QGridLayout(self.class_checkbox_container)
+        self.class_grid_layout.setSpacing(10)
+        self.class_grid_layout.setContentsMargins(10, 10, 10, 10)
+    
+        # 🔹 Attach to scroll area
+        self.class_scroll.setWidget(self.class_checkbox_container)
+    
+        # 🔹 Create new checkboxes
         self.class_checkboxes = {}
-        for cls_name in class_names:
-            cb = QCheckBox(cls_name)
-            cb.setStyleSheet("color: white;")
-            cb.setChecked(cls_name.lower() == "person")  # default selection
-            self.class_layout.addWidget(cb)
-            self.class_checkboxes[cls_name] = cb
     
-        # Only create SelectedClassesHandler if Detector exists
+        columns = 4
+        row = col = 0
+    
+        for cls_name in class_names:
+            card, checkbox = self.create_class_card(cls_name)
+    
+            checkbox.setChecked(cls_name.lower() == "person")  # default
+            self.class_grid_layout.addWidget(card, row, col)
+            self.class_checkboxes[cls_name] = checkbox
+    
+            col += 1
+            if col >= columns:
+                col = 0
+                row += 1
+    
+        # 🔹 Bind to backend Detector ONLY if ready
         backend_detector = getattr(self.thread.backendUI.backend, "Detector", None)
-        if backend_detector is not None:
+        if backend_detector:
             self.selected_class_handler = SelectedClassesHandler(
                 checkboxes=self.class_checkboxes,
                 backend_detector=backend_detector
             )
+            print("✅ SelectedClassesHandler created")
         else:
-            # Retry later or when backend.Detector becomes available
-            print("❌ Detector not ready yet — cannot create SelectedClassesHandler")
-   
+            print("⏳ Detector not ready — will bind later")
+
     def init_ui(self):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -649,12 +695,14 @@ class MonitorScreen(QWidget):
         
         status_badge = QLabel("● Status: Connected")
         status_badge.setStyleSheet(f"color: #10b981; background-color: {CARD_COLOR}; padding: 5px 10px; border-radius: 15px;")
+
         
+
         btn_disconnect = QPushButton("Disconnect")
         btn_disconnect.setObjectName("DangerButton")
         btn_disconnect.setCursor(Qt.PointingHandCursor)
         btn_disconnect.clicked.connect(self.stop_stream)
-        btn_disconnect.clicked.connect(self.disconnect_camera)
+        btn_disconnect.clicked.connect(self.disconnect_connection)
         header.addWidget(title)
         header.addStretch()
         header.addWidget(status_badge)
@@ -691,81 +739,51 @@ class MonitorScreen(QWidget):
         self.btn_detect = QPushButton("▶ Start Detection")
         self.btn_detect.setObjectName("PrimaryButton")
         self.btn_detect.setStyleSheet(self.default_detect_style)
-        '''self.btn_detect.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {PRIMARY_COLOR};
-                color: {TEXT_COLOR};
-                padding: 12px;
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background-color: {HOVER_COLOR};
-            }}
-        """)'''
+    
         self.btn_detect.clicked.connect(lambda: self.handle_mode("detection"))
         # Track Button
         self.btn_track = QPushButton("◎ Start Tracking")
-        self.btn_track.setStyleSheet(self.default_detect_style)
-        '''self.btn_track.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {CARD_COLOR};
-                color: {TEXT_COLOR};
-                padding: 12px;
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background-color: #4B5563;
-            }}
-        """)'''
+        self.btn_track.setStyleSheet(self.default_track_style)
+
         self.btn_track.clicked.connect(lambda: self.handle_mode("tracking"))
         # Full Monitor Button
         self.btn_full = QPushButton("💾 Full Monitor")
-        '''self.btn_full.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {PRIMARY_COLOR};
-                color: {TEXT_COLOR};
-                padding: 12px;
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background-color: {HOVER_COLOR};
-            }}
-        """)'''
+      
         self.btn_full.setStyleSheet(self.default_full_style)
         self.btn_full.clicked.connect(lambda: self.handle_mode("full_monitor"))
 
         # --- Class Selection (Dynamic for loaded model) ---
+        # Label
         self.class_selection_label = QLabel("Select classes to detect:")
-        self.class_selection_label.setStyleSheet("color: white; font-weight: bold;")
+        self.class_selection_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
         left_layout.addWidget(self.class_selection_label)
         
-        # Container for checkboxes
-       # self.class_checkbox_container = QWidget()
-       # self.class_layout = QVBoxLayout(self.class_checkbox_container)
-       # self.class_layout.setContentsMargins(0, 0, 0, 0)
-        #self.class_layout.setSpacing(5)
-        # Dictionary to store QCheckBox widgets
-       # self.class_checkboxes = {}
-
+        self.chk_save = QCheckBox("💾 Save Detection Video")
+        self.chk_save.setChecked(False)
+        self.chk_save.stateChanged.connect(self.toggle_save_detections)
         
-        # --- Initialize the handler AFTER checkboxes exist ---
-        #self.selected_class_handler = SelectedClassesHandler(
-            #checkboxes=self.class_checkboxes,
-           # backend_detector=self.Detector)
 
-        # Scroll area to hold checkboxes (in case of many classes)
-        class_scroll = QScrollArea()
-        class_scroll.setWidgetResizable(True)
-        class_scroll.setWidget(self.class_checkbox_container)
-        class_scroll.setStyleSheet("background-color: black; border: 1px solid #374151;")
-        left_layout.addWidget(class_scroll)
-        main_layout.addWidget(left_widget, stretch=3)
+        # Scroll Area
+        self.class_scroll = QScrollArea()
+        self.class_scroll.setWidgetResizable(True)
+        self.class_scroll.setStyleSheet("""
+            QScrollArea {background-color: #0f172a;border: 1px solid #374151;border-radius: 6px;}""")
+        left_layout.addWidget(self.class_scroll)
+        # Main container inside scroll
+        self.class_checkbox_container = QWidget()
+        self.class_grid_layout = QGridLayout(self.class_checkbox_container)
+        self.class_grid_layout.setSpacing(10)
+        self.class_grid_layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.class_scroll.setWidget(self.class_checkbox_container)
+        
         
 
         controls_layout.addWidget(self.btn_detect)
         controls_layout.addWidget(self.btn_track)
         controls_layout.addWidget(self.btn_full)
         left_layout.addLayout(controls_layout)
+        controls_layout.addWidget(self.chk_save)
 
         main_layout.addWidget(left_widget, stretch=3)
 
@@ -826,7 +844,7 @@ class MonitorScreen(QWidget):
                 self.append_log("🛑 Detection stopped.")
             else:
                 # Start detection only
-                self.reset_buttons()
+                self.reset_buttons_styles()
                 self.btn_detect.setStyleSheet(self.active_style)
                 self.btn_detect.setEnabled(True)
                 self.btn_track.setEnabled(True)
@@ -862,7 +880,7 @@ class MonitorScreen(QWidget):
         elif mode == "full_monitor":
             if self.btn_full.styleSheet() == self.active_style:
                 # Stop everything
-                self.reset_buttons()
+                self.reset_buttons_styles()
                 self.btn_detect.setEnabled(True)
                 self.btn_track.setEnabled(True)
                 self.btn_full.setEnabled(True)
@@ -880,7 +898,33 @@ class MonitorScreen(QWidget):
                 self.thread.set_mode("tracking")
                 self.append_log("💾 Full Monitoring started.")
     
-    def reset_buttons(self):
+    def create_class_card(self, class_name):
+        card = QWidget()
+        card.setStyleSheet("""QWidget {background-color: #020617;border: 5px solid black;border-radius: 8px;} QWidget:hover {border: 5px solid yellow;background-color: #020617;}""")
+    
+        layout = QVBoxLayout(card)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setContentsMargins(8, 8, 8, 8)
+        checkbox = QCheckBox(class_name)
+        checkbox.setStyleSheet("""QCheckBox {color: white;font-size: 16px;spacing: 6px;}QCheckBox::indicator {width: 20px;height: 20px;}""")
+        layout.addWidget(checkbox)
+        return card, checkbox
+    
+    def populate_class_checkboxes(self, class_names):
+        self.class_checkboxes = {}        
+        columns = 4  # 👈 4 classes per row
+        row = 0
+        col = 0        
+        for class_name in class_names:
+            card, checkbox = self.create_class_card(class_name)        
+            self.class_grid_layout.addWidget(card, row, col)
+            self.class_checkboxes[class_name] = checkbox        
+            col += 1
+            if col >= columns:
+                col = 0
+                row += 1
+
+    def reset_buttons_styles(self):
         """Reset all buttons to default style and enable them."""
         self.btn_detect.setStyleSheet(self.default_detect_style)
         self.btn_track.setStyleSheet(self.default_track_style)
@@ -888,9 +932,11 @@ class MonitorScreen(QWidget):
         self.btn_detect.setEnabled(True)
         self.btn_track.setEnabled(True)
         self.btn_full.setEnabled(True)
+        self.chk_save.setChecked(False)
 
-    def disconnect_camera(self):
+    def disconnect_connection(self):
         if self.thread:
+
             try:
                 # Stop backend modes first
                 self.thread.backendUI.stop_all_modes()
@@ -908,7 +954,6 @@ class MonitorScreen(QWidget):
                 self.thread.log_signal.disconnect()
             except:
                 pass
-    
             # Tell the thread to stop
             self.thread.running = False
     
@@ -917,20 +962,46 @@ class MonitorScreen(QWidget):
     
             # Fully remove thread reference
             self.thread = None
+        self.reset_buttons_styles()
     
-        self.reset_buttons()
+    def toggle_save_detections(self):
+        if not self.is_saving:
+            self.save_options()
+        else:
+            self.is_saving = False
+            if self.thread:
+                self.thread.backendUI.backend.set_save_options(False)
+            self.append_log("🛑 Saving stopped")
     
-    def get_selected_class_ids(self):
-        """
-        Convert selected checkbox names into YOLO class IDs.
-        """
-        if not self.thread or not self.thread.backendUI:
-            return []
-
-        selected_names = [name for name, cb in self.class_checkboxes.items() if cb.isChecked()]
-        model = self.thread.backendUI.Detector.model
-        selected_ids = [cls_id for cls_id, cls_name in model.names.items() if cls_name in selected_names]
-        return selected_ids
+    def save_options(self):
+        options = ["Video", "Frames"]
+        option, ok = QInputDialog.getItem(
+            self, "Save Detections", "Save as:", options, 0, False
+        )
+        if not ok:
+            return
+    
+        folder_name, ok = QInputDialog.getText(
+            self, "Folder Name",
+            "Enter name (leave empty for timestamp):"
+        )
+        if not ok:
+            return
+    
+        from datetime import datetime
+        import os
+    
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        folder_name = folder_name.strip() or timestamp
+        save_root = os.path.join("Saved_Detections", folder_name)
+        os.makedirs(save_root, exist_ok=True)
+    
+        self.is_saving = True
+    
+        save_type = "frames" if option == "Frames" else "video"
+        self.thread.backendUI.backend.set_save_options(True, save_type, save_root)
+    
+        self.append_log(f"💾 Saving started ({save_type})")
 
     def closeEvent(self, event):
         if self.thread:
@@ -955,10 +1026,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.connection_screen)
         self.stack.addWidget(self.monitor_screen)
 
-    #def go_to_monitor(self, source):
-        #self.monitor_screen.start_stream(source)
-        #self.stack.setCurrentWidget(self.monitor_screen)
-
     def go_to_monitor(self, source, model_path):
         self.monitor_screen.start_stream(source, model_path)
         self.stack.setCurrentWidget(self.monitor_screen)
@@ -966,7 +1033,6 @@ class MainWindow(QMainWindow):
     def go_to_connection(self):
         self.stack.setCurrentWidget(self.connection_screen)
     
-
 class SelectedClassesHandler:
     """
     Handles dynamically sending selected class IDs to the backend.
@@ -983,17 +1049,17 @@ class SelectedClassesHandler:
 
         # Connect signal with checkbox name
         for name, cb in self.checkboxes.items():
-            cb.stateChanged.connect(lambda state, n=name: self.on_checkbox_changed(n, state))
+            cb.stateChanged.connect(lambda state, n=name: self.detect_class_checkbox_changes(n, state))
 
         # Send initial selection
-        self.send_selected_classes()
+        self.send_selected_classes_to_backend()
 
-    def on_checkbox_changed(self, name, state):
+    def detect_class_checkbox_changes(self, name, state):
         """Called instantly when any checkbox changes."""
         print(f"🔘 Checkbox '{name}' is now {'checked' if state else 'unchecked'}")
-        self.send_selected_classes()
-    
-    def send_selected_classes(self):
+        self.send_selected_classes_to_backend()
+
+    def send_selected_classes_to_backend(self):
         selected_names = [
             name for name, cb in self.checkboxes.items() if cb.isChecked()
         ]
@@ -1010,7 +1076,7 @@ class SelectedClassesHandler:
         ]
     
         # Send to backend detector
-        detector.update_selected_classes(selected_ids)
+        detector.update_selected_classes_for_backend(selected_ids)
     
         print("📤 UI sent selected class IDs:", selected_ids)
 
