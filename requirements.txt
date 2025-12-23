@@ -1,4 +1,4 @@
-opencv-python
+opencv-python-headless
 torch
 torchvision
 numpy
@@ -15,3 +15,5 @@ tqdm
 psutil
 pyqt5
 lapx
+python-dotenv
+supabase

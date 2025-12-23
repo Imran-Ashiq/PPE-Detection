@@ -4,7 +4,7 @@ import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QPushButton, QComboBox, 
                              QStackedWidget, QFileDialog,QInputDialog, QFrame, QScrollArea,
-                             QSizePolicy, QGridLayout,QLineEdit,QCheckBox)
+                             QSizePolicy, QGridLayout,QLineEdit,QCheckBox, QDialog, QStyle)
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal,QTimer
 from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QImage, QPixmap
 import cv2
@@ -17,6 +17,7 @@ import traceback
 import os
 import datetime
 import objectTracking
+from auth_manager import AuthManager
 
 # --- Color Palette & Styles ---
 BACKGROUND_COLOR = "#111827"  # Dark background
@@ -95,6 +96,54 @@ STYLESHEET = f"""
     QComboBox::drop-down {{
         border: none;
     }}
+    QComboBox QAbstractItemView {{
+        background-color: {CARD_COLOR};
+        color: {TEXT_COLOR};
+        selection-background-color: {PRIMARY_COLOR};
+        selection-color: white;
+        border: 1px solid #374151;
+    }}
+    /* --- New Dashboard Styles --- */
+    QFrame#HeaderFrame {{
+        background-color: {CARD_COLOR};
+        border-bottom: 1px solid #374151;
+    }}
+    QFrame#VideoContainer {{
+        background-color: black;
+        border: 2px solid #374151;
+        border-radius: 12px;
+    }}
+    QFrame#ControlPanel {{
+        background-color: {CARD_COLOR};
+        border-top: 1px solid #374151;
+        border-radius: 12px;
+    }}
+    QFrame#ClassPanel {{
+        background-color: {CARD_COLOR};
+        border: 1px solid #374151;
+        border-radius: 8px;
+    }}
+    QCheckBox {{
+        spacing: 8px;
+        color: {TEXT_COLOR};
+        font-size: 14px;
+        padding: 4px;
+    }}
+    QCheckBox::indicator {{
+        width: 20px;
+        height: 20px;
+        border: 1px solid #4B5563;
+        border-radius: 6px;
+        background-color: {BACKGROUND_COLOR};
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {PRIMARY_COLOR};
+        border: 1px solid {PRIMARY_COLOR};
+        image: url(check_icon.png); 
+    }}
+    QCheckBox::indicator:hover {{
+        border: 1px solid {PRIMARY_COLOR};
+    }}
     QLabel#Title {{
         font-size: 24px;
         font-weight: bold;
@@ -107,9 +156,140 @@ STYLESHEET = f"""
         font-size: 16px;
         font-weight: bold;
         color: {PRIMARY_COLOR};
+        padding-bottom: 8px;
     }}
 """
 
+
+class SaveDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Start Recording")
+        self.setFixedWidth(450)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {CARD_COLOR};
+                border: 1px solid #374151;
+                border-radius: 8px;
+            }}
+            QLabel {{
+                color: {TEXT_COLOR};
+                font-size: 14px;
+            }}
+            QLineEdit {{
+                background-color: {BACKGROUND_COLOR};
+                color: {TEXT_COLOR};
+                border: 1px solid #374151;
+                padding: 8px;
+                border-radius: 4px;
+            }}
+            QComboBox {{
+                background-color: {BACKGROUND_COLOR};
+                color: {TEXT_COLOR};
+                border: 1px solid #374151;
+                padding: 8px;
+                border-radius: 4px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {CARD_COLOR};
+                color: {TEXT_COLOR};
+                selection-background-color: {PRIMARY_COLOR};
+                selection-color: white;
+                border: 1px solid #374151;
+            }}
+            QPushButton {{
+                background-color: {PRIMARY_COLOR};
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #0284c7;
+            }}
+            QPushButton#Secondary {{
+                background-color: transparent;
+                border: 1px solid #374151;
+                color: {SECONDARY_TEXT};
+            }}
+            QPushButton#Secondary:hover {{
+                background-color: #374151;
+                color: {TEXT_COLOR};
+            }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Title
+        title = QLabel("Recording Options")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: white;")
+        layout.addWidget(title)
+        
+        # Save Type
+        layout.addWidget(QLabel("Save Format:"))
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["Video (.mp4)", "Frames (.jpg)"])
+        layout.addWidget(self.type_combo)
+        
+        # Location
+        layout.addWidget(QLabel("Save Location:"))
+        loc_layout = QHBoxLayout()
+        self.path_input = QLineEdit()
+        self.path_input.setText(os.path.join(os.getcwd(), "Saved_Detections"))
+        loc_layout.addWidget(self.path_input)
+        
+        browse_btn = QPushButton("Browse")
+        browse_btn.setObjectName("Secondary")
+        browse_btn.setCursor(Qt.PointingHandCursor)
+        browse_btn.clicked.connect(self.browse_folder)
+        loc_layout.addWidget(browse_btn)
+        layout.addLayout(loc_layout)
+        
+        # Folder/File Name
+        layout.addWidget(QLabel("Subfolder Name (Optional):"))
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("e.g., session_01 (leave empty for timestamp)")
+        layout.addWidget(self.name_input)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("Secondary")
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        
+        save_btn = QPushButton("Start Recording")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(save_btn)
+        
+        layout.addLayout(btn_layout)
+        
+    def browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Directory")
+        if folder:
+            self.path_input.setText(folder)
+
+    def get_data(self):
+        save_type = "video" if "Video" in self.type_combo.currentText() else "frames"
+        base_path = self.path_input.text()
+        subfolder = self.name_input.text().strip()
+        
+        if not subfolder:
+            from datetime import datetime
+            subfolder = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            
+        full_path = os.path.join(base_path, subfolder)
+        return save_type, full_path
 
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
@@ -351,6 +531,169 @@ class VideoThread(QThread):
         # Wait for the QThread event loop to finish (caller will call wait())
         # Backend run thread is joined in run() finalizer
 
+class LoginScreen(QWidget):
+    def __init__(self, auth_manager, on_login_success, on_go_to_signup):
+        super().__init__()
+        self.auth_manager = auth_manager
+        self.on_login_success = on_login_success
+        self.on_go_to_signup = on_go_to_signup
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setFixedWidth(400)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(20)
+        card_layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("Login")
+        title.setObjectName("Title")
+        title.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(title)
+
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Email")
+        self.email_input.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR}; padding: 10px; border: 1px solid #374151; border-radius: 6px;")
+        card_layout.addWidget(self.email_input)
+
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Password")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR}; padding: 10px; border: 1px solid #374151; border-radius: 6px;")
+        card_layout.addWidget(self.password_input)
+
+        self.login_btn = QPushButton("Login")
+        self.login_btn.setObjectName("PrimaryButton")
+        self.login_btn.setCursor(Qt.PointingHandCursor)
+        self.login_btn.clicked.connect(self.handle_login)
+        card_layout.addWidget(self.login_btn)
+
+        self.signup_link = QPushButton("Don't have an account? Sign up")
+        self.signup_link.setObjectName("TabButton")
+        self.signup_link.setCursor(Qt.PointingHandCursor)
+        self.signup_link.clicked.connect(self.on_go_to_signup)
+        card_layout.addWidget(self.signup_link)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet(f"color: {DANGER_COLOR};")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(self.error_label)
+
+        layout.addWidget(card)
+
+    def handle_login(self):
+        email = self.email_input.text()
+        password = self.password_input.text()
+        
+        if not email or not password:
+            self.error_label.setText("Please fill in all fields")
+            return
+
+        self.login_btn.setText("Logging in...")
+        self.login_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        result = self.auth_manager.login(email, password)
+        
+        self.login_btn.setText("Login")
+        self.login_btn.setEnabled(True)
+
+        if result["success"]:
+            self.on_login_success()
+        else:
+            self.error_label.setText(result["error"])
+
+class SignupScreen(QWidget):
+    def __init__(self, auth_manager, on_signup_success, on_go_to_login):
+        super().__init__()
+        self.auth_manager = auth_manager
+        self.on_signup_success = on_signup_success
+        self.on_go_to_login = on_go_to_login
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card.setFixedWidth(400)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(20)
+        card_layout.setContentsMargins(40, 40, 40, 40)
+
+        title = QLabel("Sign Up")
+        title.setObjectName("Title")
+        title.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(title)
+
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Email")
+        self.email_input.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR}; padding: 10px; border: 1px solid #374151; border-radius: 6px;")
+        card_layout.addWidget(self.email_input)
+
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Password")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR}; padding: 10px; border: 1px solid #374151; border-radius: 6px;")
+        card_layout.addWidget(self.password_input)
+
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setPlaceholderText("Confirm Password")
+        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        self.confirm_password_input.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR}; padding: 10px; border: 1px solid #374151; border-radius: 6px;")
+        card_layout.addWidget(self.confirm_password_input)
+
+        self.signup_btn = QPushButton("Sign Up")
+        self.signup_btn.setObjectName("PrimaryButton")
+        self.signup_btn.setCursor(Qt.PointingHandCursor)
+        self.signup_btn.clicked.connect(self.handle_signup)
+        card_layout.addWidget(self.signup_btn)
+
+        self.login_link = QPushButton("Already have an account? Login")
+        self.login_link.setObjectName("TabButton")
+        self.login_link.setCursor(Qt.PointingHandCursor)
+        self.login_link.clicked.connect(self.on_go_to_login)
+        card_layout.addWidget(self.login_link)
+
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet(f"color: {DANGER_COLOR};")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(self.error_label)
+
+        layout.addWidget(card)
+
+    def handle_signup(self):
+        email = self.email_input.text()
+        password = self.password_input.text()
+        confirm_password = self.confirm_password_input.text()
+        
+        if not email or not password or not confirm_password:
+            self.error_label.setText("Please fill in all fields")
+            return
+
+        if password != confirm_password:
+            self.error_label.setText("Passwords do not match")
+            return
+
+        self.signup_btn.setText("Signing up...")
+        self.signup_btn.setEnabled(False)
+        QApplication.processEvents()
+
+        result = self.auth_manager.signup(email, password)
+        
+        self.signup_btn.setText("Sign Up")
+        self.signup_btn.setEnabled(True)
+
+        if result["success"]:
+            self.on_signup_success()
+        else:
+            self.error_label.setText(result["error"])
+
 class ConnectionScreen(QWidget):
     def __init__(self, switch_callback):
         super().__init__()
@@ -500,7 +843,11 @@ class ConnectionScreen(QWidget):
             self.btn_activate.setText("Activate IP Camera")
 
     def browse_file(self):
-        fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', 'c:\\', "Video files (*.mp4 *.avi)")
+        default_dir = os.path.join(os.getcwd(), "Saved_Detections")
+        if not os.path.exists(default_dir):
+            default_dir = os.getcwd()
+            
+        fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', default_dir, "Video files (*.mp4 *.avi)")
         if fname:
             self.video_path = fname
             self.file_btn.setText(fname.split('/')[-1])
@@ -618,13 +965,21 @@ class MonitorScreen(QWidget):
         self.video_frame.setPixmap(QPixmap.fromImage(scaled))
 
     def append_log(self, message):
-        lbl = QLabel(message)
-        lbl.setStyleSheet(f"color: {SECONDARY_TEXT}; border-bottom: 1px solid #374151; padding: 5px;")
+        # Hide empty state when first log arrives
+        if self.empty_state.isVisible():
+            self.empty_state.hide()
+
+        lbl = QLabel(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {TEXT_COLOR}; border-bottom: 1px solid #374151; padding: 8px 0;")
+        
+        # Insert at top (index 0)
         self.log_layout.insertWidget(0, lbl)
-        # Keep log size manageable
-        if self.log_layout.count() > 50:
-            item = self.log_layout.itemAt(self.log_layout.count() - 1)
-            if item.widget():
+        
+        # Keep log size manageable (max 100 entries)
+        if self.log_layout.count() > 100:
+            item = self.log_layout.itemAt(self.log_layout.count() - 2) # -2 because of stretch at end
+            if item and item.widget() and item.widget() != self.empty_state:
                 item.widget().deleteLater()
 
     def set_mode(self, mode):
@@ -633,8 +988,6 @@ class MonitorScreen(QWidget):
 
     def show_model_classes(self, class_names):
         print("📦 DEBUG: show_model_classes() called")
-        print("📦 thread:", self.thread)
-        print("📦 backendUI:", getattr(self.thread, "backendUI", None))
     
         # 🔥 SAFELY remove old container (if exists)
         if hasattr(self, "class_checkbox_container") and self.class_checkbox_container:
@@ -642,9 +995,10 @@ class MonitorScreen(QWidget):
     
         # 🔹 Recreate container + grid layout
         self.class_checkbox_container = QWidget()
+        self.class_checkbox_container.setStyleSheet("background: transparent;")
         self.class_grid_layout = QGridLayout(self.class_checkbox_container)
         self.class_grid_layout.setSpacing(10)
-        self.class_grid_layout.setContentsMargins(10, 10, 10, 10)
+        self.class_grid_layout.setContentsMargins(0, 0, 0, 0)
     
         # 🔹 Attach to scroll area
         self.class_scroll.setWidget(self.class_checkbox_container)
@@ -652,14 +1006,18 @@ class MonitorScreen(QWidget):
         # 🔹 Create new checkboxes
         self.class_checkboxes = {}
     
-        columns = 4
+        columns = 1  # 👈 1 column for sidebar list view
         row = col = 0
     
         for cls_name in class_names:
-            card, checkbox = self.create_class_card(cls_name)
-    
-            checkbox.setChecked(cls_name.lower() == "person")  # default
-            self.class_grid_layout.addWidget(card, row, col)
+            # Create a styled checkbox
+            checkbox = QCheckBox(cls_name.capitalize())
+            checkbox.setCursor(Qt.PointingHandCursor)
+            
+            # Default check 'person'
+            checkbox.setChecked(cls_name.lower() == "person")
+            
+            self.class_grid_layout.addWidget(checkbox, row, col)
             self.class_checkboxes[cls_name] = checkbox
     
             col += 1
@@ -683,123 +1041,175 @@ class MonitorScreen(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # --- Left Content (Video & Controls) ---
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(20, 20, 20, 20)
+        # =========================================
+        # 1. LEFT SIDEBAR (Detection Classes)
+        # =========================================
+        left_sidebar = QFrame()
+        left_sidebar.setStyleSheet(f"background-color: {CARD_COLOR}; border-right: 1px solid #374151;")
+        left_sidebar.setFixedWidth(250)
+        left_sidebar_layout = QVBoxLayout(left_sidebar)
+        left_sidebar_layout.setContentsMargins(15, 20, 15, 20)
+        left_sidebar_layout.setSpacing(15)
+
+        # Title
+        class_title = QLabel("Detection Classes")
+        class_title.setObjectName("SectionTitle")
+        left_sidebar_layout.addWidget(class_title)
+
+        class_subtitle = QLabel("Select objects to track")
+        class_subtitle.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 12px;")
+        left_sidebar_layout.addWidget(class_subtitle)
+
+        # Scroll Area for Classes
+        self.class_scroll = QScrollArea()
+        self.class_scroll.setWidgetResizable(True)
+        self.class_scroll.setStyleSheet("background: transparent; border: none;")
         
+        # Container for checkboxes (will be populated later)
+        self.class_checkbox_container = QWidget()
+        self.class_grid_layout = QGridLayout(self.class_checkbox_container)
+        self.class_grid_layout.setSpacing(10)
+        self.class_grid_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.class_scroll.setWidget(self.class_checkbox_container)
+        left_sidebar_layout.addWidget(self.class_scroll)
+
+        main_layout.addWidget(left_sidebar)
+
+        # =========================================
+        # 2. CENTER CONTENT (Video & Controls)
+        # =========================================
+        center_widget = QWidget()
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setContentsMargins(20, 20, 20, 20)
+        center_layout.setSpacing(20)
+
         # Header
-        header = QHBoxLayout()
+        header_frame = QFrame()
+        header_frame.setObjectName("HeaderFrame")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(15, 10, 15, 10)
+
         title = QLabel("PPE Safety Monitor")
         title.setObjectName("Title")
         
-        status_badge = QLabel("● Status: Connected")
-        status_badge.setStyleSheet(f"color: #10b981; background-color: {CARD_COLOR}; padding: 5px 10px; border-radius: 15px;")
-
-        
+        status_badge = QLabel("Live")
+        status_badge.setStyleSheet(f"color: #10b981; font-weight: bold; background-color: rgba(16, 185, 129, 0.1); padding: 5px 10px; border-radius: 12px;")
 
         btn_disconnect = QPushButton("Disconnect")
+        btn_disconnect.setIcon(self.style().standardIcon(QStyle.SP_BrowserStop))
         btn_disconnect.setObjectName("DangerButton")
         btn_disconnect.setCursor(Qt.PointingHandCursor)
         btn_disconnect.clicked.connect(self.stop_stream)
         btn_disconnect.clicked.connect(self.disconnect_connection)
-        header.addWidget(title)
-        header.addStretch()
-        header.addWidget(status_badge)
-        header.addWidget(btn_disconnect)
-        left_layout.addLayout(header)
         
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        header_layout.addWidget(status_badge)
+        header_layout.addWidget(btn_disconnect)
+        center_layout.addWidget(header_frame)
 
         # Video Placeholder
-        self.video_frame = QLabel("Video Stream Loading...")
+        video_container = QFrame()
+        video_container.setObjectName("VideoContainer")
+        video_layout = QVBoxLayout(video_container)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.video_frame = QLabel("Initializing Video Stream...")
         self.video_frame.setAlignment(Qt.AlignCenter)
-        self.video_frame.setStyleSheet(f"background-color: black; border-radius: 12px; border: 2px solid #374151;")
+        self.video_frame.setStyleSheet("color: #6B7280; font-size: 18px;")
         self.video_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        left_layout.addWidget(self.video_frame)
-        # --- Button Styles ---
-        self.active_style = (
-            "background-color: #DC2626; color: white; padding: 12px; border-radius: 6px;"
-        )  # Red Active Button
-        
-        self.default_detect_style = (
-            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px; border-radius: 6px;"
-        )
-        
-        self.default_track_style = (
-            f"background-color: {CARD_COLOR}; color: white; padding: 12px; border-radius: 6px;"
-        )
-        
-        self.default_full_style = (
-            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px; border-radius: 6px;"
-        )
+        video_layout.addWidget(self.video_frame)
+        center_layout.addWidget(video_container, stretch=1)
 
-        # Bottom Controls
+        # Control Buttons (Horizontal Row)
         controls_layout = QHBoxLayout()
-        # Detect Button
-        self.btn_detect = QPushButton("▶ Start Detection")
-        self.btn_detect.setObjectName("PrimaryButton")
-        self.btn_detect.setStyleSheet(self.default_detect_style)
-    
-        self.btn_detect.clicked.connect(lambda: self.handle_mode("detection"))
-        # Track Button
-        self.btn_track = QPushButton("◎ Start Tracking")
-        self.btn_track.setStyleSheet(self.default_track_style)
+        controls_layout.setSpacing(15)
+        
+        # Define Styles
+        self.active_style = (
+            "background-color: #DC2626; color: white; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: left;"
+        )
+        self.default_detect_style = (
+            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: left;"
+        )
+        self.default_track_style = (
+            f"background-color: {CARD_COLOR}; color: white; border: 1px solid #374151; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: left;"
+        )
+        self.default_full_style = (
+            f"background-color: {PRIMARY_COLOR}; color: white; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: left;"
+        )
+        self.default_save_style = (
+            f"background-color: {CARD_COLOR}; color: white; border: 1px solid #374151; padding: 12px 24px; border-radius: 6px; font-weight: bold; text-align: left;"
+        )
+        self.active_save_style = (
+            "background-color: #DC2626; color: white; padding: 12px 24px; border-radius: 6px; border: 1px solid #DC2626; font-weight: bold; text-align: left;"
+        )
 
+        # Detect Button
+        self.btn_detect = QPushButton("Start Detection")
+        self.btn_detect.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.btn_detect.setCursor(Qt.PointingHandCursor)
+        self.btn_detect.setStyleSheet(self.default_detect_style)
+        self.btn_detect.clicked.connect(lambda: self.handle_mode("detection"))
+        
+        # Track Button
+        self.btn_track = QPushButton("Start Tracking")
+        self.btn_track.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        self.btn_track.setCursor(Qt.PointingHandCursor)
+        self.btn_track.setStyleSheet(self.default_track_style)
         self.btn_track.clicked.connect(lambda: self.handle_mode("tracking"))
+        
         # Full Monitor Button
-        self.btn_full = QPushButton("💾 Full Monitor")
-      
+        self.btn_full = QPushButton("Full Monitor")
+        self.btn_full.setIcon(self.style().standardIcon(QStyle.SP_DesktopIcon))
+        self.btn_full.setCursor(Qt.PointingHandCursor)
         self.btn_full.setStyleSheet(self.default_full_style)
         self.btn_full.clicked.connect(lambda: self.handle_mode("full_monitor"))
 
-        # --- Class Selection (Dynamic for loaded model) ---
-        # Label
-        self.class_selection_label = QLabel("Select classes to detect:")
-        self.class_selection_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
-        left_layout.addWidget(self.class_selection_label)
-        
-        self.chk_save = QCheckBox("💾 Save Detection Video")
-        self.chk_save.setChecked(False)
-        self.chk_save.stateChanged.connect(self.toggle_save_detections)
-        
-
-        # Scroll Area
-        self.class_scroll = QScrollArea()
-        self.class_scroll.setWidgetResizable(True)
-        self.class_scroll.setStyleSheet("""
-            QScrollArea {background-color: #0f172a;border: 1px solid #374151;border-radius: 6px;}""")
-        left_layout.addWidget(self.class_scroll)
-        # Main container inside scroll
-        self.class_checkbox_container = QWidget()
-        self.class_grid_layout = QGridLayout(self.class_checkbox_container)
-        self.class_grid_layout.setSpacing(10)
-        self.class_grid_layout.setContentsMargins(10, 10, 10, 10)
-        
-        self.class_scroll.setWidget(self.class_checkbox_container)
-        
-        
+        # Save Button
+        self.btn_save = QPushButton("Start Recording")
+        self.btn_save.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setStyleSheet(self.default_save_style)
+        self.btn_save.clicked.connect(self.toggle_save_detections)
 
         controls_layout.addWidget(self.btn_detect)
         controls_layout.addWidget(self.btn_track)
         controls_layout.addWidget(self.btn_full)
-        left_layout.addLayout(controls_layout)
-        controls_layout.addWidget(self.chk_save)
+        controls_layout.addStretch()
+        controls_layout.addWidget(self.btn_save)
+        
+        center_layout.addLayout(controls_layout)
+        
+        main_layout.addWidget(center_widget, stretch=3)
 
-        main_layout.addWidget(left_widget, stretch=3)
-
-        # --- Right Sidebar (Logs) ---
+        # =========================================
+        # 3. RIGHT SIDEBAR (Logs)
+        # =========================================
         sidebar = QFrame()
         sidebar.setStyleSheet(f"background-color: {CARD_COLOR}; border-left: 1px solid #374151;")
-        sidebar.setFixedWidth(300)
+        sidebar.setFixedWidth(320)
         sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(20, 20, 20, 20)
+        sidebar_layout.setSpacing(15)
         
-        log_title = QLabel("Live Detection Log")
+        log_header = QHBoxLayout()
+        log_title = QLabel("System Logs")
         log_title.setObjectName("SectionTitle")
-        sidebar_layout.addWidget(log_title)
+        log_header.addWidget(log_title)
+        log_header.addStretch()
         
-        log_subtitle = QLabel("Real-time safety intelligence")
-        log_subtitle.setObjectName("Subtitle")
-        sidebar_layout.addWidget(log_subtitle)
+        # Clear Logs Button (Small)
+        self.btn_clear_logs = QPushButton("Clear")
+        self.btn_clear_logs.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        self.btn_clear_logs.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_logs.setFixedSize(80, 30)
+        self.btn_clear_logs.setStyleSheet(f"background-color: {BACKGROUND_COLOR}; color: {SECONDARY_TEXT}; border: 1px solid #374151; border-radius: 4px; font-size: 12px;")
+        self.btn_clear_logs.clicked.connect(self.clear_logs)
+        log_header.addWidget(self.btn_clear_logs)
+        
+        sidebar_layout.addLayout(log_header)
         
         # Scrollable Log Area
         scroll = QScrollArea()
@@ -807,17 +1217,48 @@ class MonitorScreen(QWidget):
         scroll.setStyleSheet("background: transparent; border: none;")
         self.log_container = QWidget()
         self.log_layout = QVBoxLayout(self.log_container)
+        self.log_layout.setSpacing(10)
         self.log_layout.addStretch()
         scroll.setWidget(self.log_container)
         sidebar_layout.addWidget(scroll)
 
         # Placeholder Empty State
-        empty_state = QLabel("🛡️\nReady to Monitor")
-        empty_state.setAlignment(Qt.AlignCenter)
-        empty_state.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 16px;")
-        self.log_layout.addWidget(empty_state)
+        self.empty_state = QLabel("System Ready\nWaiting for activity...")
+        self.empty_state.setAlignment(Qt.AlignCenter)
+        self.empty_state.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 14px; padding: 20px;")
+        self.log_layout.insertWidget(0, self.empty_state)
 
         main_layout.addWidget(sidebar, stretch=1)
+
+    def clear_logs(self):
+        # Remove all widgets from log layout except the stretch
+        while self.log_layout.count() > 1: # Keep the stretch at the end
+            item = self.log_layout.itemAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            self.log_layout.removeItem(item)
+        
+        # Re-add empty state if needed, or just leave it clean
+        self.log_layout.insertWidget(0, self.empty_state)
+        self.empty_state.show()
+
+    def append_log(self, message):
+        # Hide empty state when first log arrives
+        if self.empty_state.isVisible():
+            self.empty_state.hide()
+
+        lbl = QLabel(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {TEXT_COLOR}; border-bottom: 1px solid #374151; padding: 8px 0;")
+        
+        # Insert at top (index 0)
+        self.log_layout.insertWidget(0, lbl)
+        
+        # Keep log size manageable (max 100 entries)
+        if self.log_layout.count() > 100:
+            item = self.log_layout.itemAt(self.log_layout.count() - 2) # -2 because of stretch at end
+            if item and item.widget() and item.widget() != self.empty_state:
+                item.widget().deleteLater()
     
     def handle_mode(self, mode):
         """
@@ -896,7 +1337,7 @@ class MonitorScreen(QWidget):
                 self.btn_full.setEnabled(True)
                 # Backend: tracking (detection is implicit)
                 self.thread.set_mode("tracking")
-                self.append_log("💾 Full Monitoring started.")
+                self.append_log(" Full Monitoring started.")
     
     def create_class_card(self, class_name):
         card = QWidget()
@@ -932,7 +1373,11 @@ class MonitorScreen(QWidget):
         self.btn_detect.setEnabled(True)
         self.btn_track.setEnabled(True)
         self.btn_full.setEnabled(True)
-        self.chk_save.setChecked(False)
+        
+        # Reset Save Button
+        self.is_saving = False
+        self.btn_save.setText(" Start Recording")
+        self.btn_save.setStyleSheet(self.default_save_style)
 
     def disconnect_connection(self):
         if self.thread:
@@ -968,40 +1413,32 @@ class MonitorScreen(QWidget):
         if not self.is_saving:
             self.save_options()
         else:
-            self.is_saving = False
-            if self.thread:
-                self.thread.backendUI.backend.set_save_options(False)
-            self.append_log("🛑 Saving stopped")
+            self.stop_saving()
+
+    def stop_saving(self):
+        self.is_saving = False
+        if self.thread:
+            self.thread.backendUI.backend.set_save_options(False)
+        self.append_log("🛑 Saving stopped")
+        self.btn_save.setText(" Start Recording")
+        self.btn_save.setStyleSheet(self.default_save_style)
     
     def save_options(self):
-        options = ["Video", "Frames"]
-        option, ok = QInputDialog.getItem(
-            self, "Save Detections", "Save as:", options, 0, False
-        )
-        if not ok:
-            return
-    
-        folder_name, ok = QInputDialog.getText(
-            self, "Folder Name",
-            "Enter name (leave empty for timestamp):"
-        )
-        if not ok:
-            return
-    
-        from datetime import datetime
-        import os
-    
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        folder_name = folder_name.strip() or timestamp
-        save_root = os.path.join("Saved_Detections", folder_name)
-        os.makedirs(save_root, exist_ok=True)
-    
-        self.is_saving = True
-    
-        save_type = "frames" if option == "Frames" else "video"
-        self.thread.backendUI.backend.set_save_options(True, save_type, save_root)
-    
-        self.append_log(f"💾 Saving started ({save_type})")
+        dialog = SaveDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            save_type, save_root = dialog.get_data()
+            
+            import os
+            os.makedirs(save_root, exist_ok=True)
+        
+            self.is_saving = True
+            self.btn_save.setText("⏹ Stop Recording")
+            self.btn_save.setStyleSheet(self.active_save_style)
+        
+            self.thread.backendUI.backend.set_save_options(True, save_type, save_root)
+        
+            self.append_log(f"💾 Saving started ({save_type})")
+            self.append_log(f"📂 Location: {os.path.abspath(save_root)}")
 
     def closeEvent(self, event):
         if self.thread:
@@ -1016,15 +1453,33 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setStyleSheet(STYLESHEET)
 
+        self.auth_manager = AuthManager()
+
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
 
+        self.login_screen = LoginScreen(self.auth_manager, self.go_to_connection, self.go_to_signup)
+        self.signup_screen = SignupScreen(self.auth_manager, self.go_to_login_from_signup, self.go_to_login)
         self.connection_screen = ConnectionScreen(self.go_to_monitor)
         self.monitor_screen = MonitorScreen(self.go_to_connection)
         
-
+        self.stack.addWidget(self.login_screen)
+        self.stack.addWidget(self.signup_screen)
         self.stack.addWidget(self.connection_screen)
         self.stack.addWidget(self.monitor_screen)
+
+        self.stack.setCurrentWidget(self.login_screen)
+
+    def go_to_signup(self):
+        self.stack.setCurrentWidget(self.signup_screen)
+
+    def go_to_login(self):
+        self.stack.setCurrentWidget(self.login_screen)
+
+    def go_to_login_from_signup(self):
+        self.login_screen.error_label.setText("Signup successful! Please login.")
+        self.login_screen.error_label.setStyleSheet(f"color: {PRIMARY_COLOR};")
+        self.stack.setCurrentWidget(self.login_screen)
 
     def go_to_monitor(self, source, model_path):
         self.monitor_screen.start_stream(source, model_path)

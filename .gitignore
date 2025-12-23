@@ -5,3 +5,4 @@ __pycache__/
 epoch31.pt
 .vscode/
 recording_*.avi
+.env
