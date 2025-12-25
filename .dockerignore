@@ -1,0 +1,7 @@
+ppe/
+__pycache__/
+*.mp4
+Saved_Detections/
+.git/
+.vscode/
+.env
