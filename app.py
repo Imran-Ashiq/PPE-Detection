@@ -550,6 +550,14 @@ class LoginScreen(QWidget):
         card_layout.setSpacing(20)
         card_layout.setContentsMargins(40, 40, 40, 40)
 
+        # Logo
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("PPE.png")
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(logo_pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo_label.setAlignment(Qt.AlignCenter)
+            card_layout.addWidget(logo_label)
+
         title = QLabel("Login")
         title.setObjectName("Title")
         title.setAlignment(Qt.AlignCenter)
@@ -569,12 +577,14 @@ class LoginScreen(QWidget):
         self.login_btn = QPushButton("Login")
         self.login_btn.setObjectName("PrimaryButton")
         self.login_btn.setCursor(Qt.PointingHandCursor)
+        self.login_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
         self.login_btn.clicked.connect(self.handle_login)
         card_layout.addWidget(self.login_btn)
 
         self.signup_link = QPushButton("Don't have an account? Sign up")
         self.signup_link.setObjectName("TabButton")
         self.signup_link.setCursor(Qt.PointingHandCursor)
+        self.signup_link.setIcon(self.style().standardIcon(QStyle.SP_DialogHelpButton))
         self.signup_link.clicked.connect(self.on_go_to_signup)
         card_layout.addWidget(self.signup_link)
 
@@ -626,6 +636,14 @@ class SignupScreen(QWidget):
         card_layout.setSpacing(20)
         card_layout.setContentsMargins(40, 40, 40, 40)
 
+        # Logo
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("PPE.png")
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(logo_pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo_label.setAlignment(Qt.AlignCenter)
+            card_layout.addWidget(logo_label)
+
         title = QLabel("Sign Up")
         title.setObjectName("Title")
         title.setAlignment(Qt.AlignCenter)
@@ -651,12 +669,14 @@ class SignupScreen(QWidget):
         self.signup_btn = QPushButton("Sign Up")
         self.signup_btn.setObjectName("PrimaryButton")
         self.signup_btn.setCursor(Qt.PointingHandCursor)
+        self.signup_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
         self.signup_btn.clicked.connect(self.handle_signup)
         card_layout.addWidget(self.signup_btn)
 
         self.login_link = QPushButton("Already have an account? Login")
         self.login_link.setObjectName("TabButton")
         self.login_link.setCursor(Qt.PointingHandCursor)
+        self.login_link.setIcon(self.style().standardIcon(QStyle.SP_ArrowBack))
         self.login_link.clicked.connect(self.on_go_to_login)
         card_layout.addWidget(self.login_link)
 
@@ -717,10 +737,12 @@ class ConnectionScreen(QWidget):
         card_layout.setContentsMargins(40, 40, 40, 40)
 
         # Icon
-        icon_label = QLabel("📷")
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.setStyleSheet("font-size: 48px;")
-        card_layout.addWidget(icon_label)
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("PPE.png")
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(logo_pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo_label.setAlignment(Qt.AlignCenter)
+            card_layout.addWidget(logo_label)
 
         # Title
         title = QLabel("PPE Safety Monitor")
@@ -739,16 +761,19 @@ class ConnectionScreen(QWidget):
         self.btn_upload = QPushButton("Upload Video")
         self.btn_upload.setObjectName("TabButton")
         self.btn_upload.setCursor(Qt.PointingHandCursor)
+        self.btn_upload.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
         self.btn_upload.clicked.connect(lambda: self.set_tab("video"))
 
         self.btn_webcam = QPushButton("System Webcam")
         self.btn_webcam.setObjectName("TabButton")
         self.btn_webcam.setCursor(Qt.PointingHandCursor)
+        self.btn_webcam.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
         self.btn_webcam.clicked.connect(lambda: self.set_tab("webcam"))
 
         self.btn_ipcam = QPushButton("IP Camera")
         self.btn_ipcam.setObjectName("TabButton")
         self.btn_ipcam.setCursor(Qt.PointingHandCursor)
+        self.btn_ipcam.setIcon(self.style().standardIcon(QStyle.SP_DriveNetIcon))
         self.btn_ipcam.clicked.connect(lambda: self.set_tab("ip_camera"))
 
         tabs_layout.addWidget(self.btn_upload)
@@ -777,6 +802,7 @@ class ConnectionScreen(QWidget):
         self.btn_activate = QPushButton("Activate Camera")
         self.btn_activate.setObjectName("PrimaryButton")
         self.btn_activate.setCursor(Qt.PointingHandCursor)
+        self.btn_activate.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.btn_activate.clicked.connect(self.handle_activate)
         card_layout.addWidget(self.btn_activate)
 
@@ -818,6 +844,7 @@ class ConnectionScreen(QWidget):
             self.input_area.addWidget(lbl)
 
             self.file_btn = QPushButton("Browse File...")
+            self.file_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
             self.file_btn.clicked.connect(self.browse_file)
             self.input_area.addWidget(self.file_btn)
             self.btn_activate.setText("Load Video")
@@ -1089,6 +1116,13 @@ class MonitorScreen(QWidget):
         header_frame.setObjectName("HeaderFrame")
         header_layout = QHBoxLayout(header_frame)
         header_layout.setContentsMargins(15, 10, 15, 10)
+
+        # Small Logo in Header
+        header_logo = QLabel()
+        header_pixmap = QPixmap("PPE.png")
+        if not header_pixmap.isNull():
+            header_logo.setPixmap(header_pixmap.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            header_layout.addWidget(header_logo)
 
         title = QLabel("PPE Safety Monitor")
         title.setObjectName("Title")
@@ -1450,6 +1484,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PPE Safety Monitor")
+        
+        # Use absolute path for icon to ensure it loads correctly
+        # Using PNG often works better for PyQt window icons than ICO
+        icon_path = os.path.abspath("PPE.png")
+        self.setWindowIcon(QIcon(icon_path))
+        
         self.resize(1200, 800)
         self.setStyleSheet(STYLESHEET)
 
@@ -1536,7 +1576,22 @@ class SelectedClassesHandler:
         print("📤 UI sent selected class IDs:", selected_ids)
 
 if __name__ == "__main__":
+    # Set AppUserModelID for Windows Taskbar Icon
+    # This is CRITICAL for the taskbar icon to show up instead of the Python logo
+    import ctypes
+    myappid = 'custom.ppedetection.monitor.v1.0.0' 
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception as e:
+        print(f"⚠️ Could not set AppID: {e}")
+
     app = QApplication(sys.argv)
+    
+    # Set app-wide icon with absolute path to the PNG
+    # PNGs often render better in the taskbar for PyQt apps
+    icon_path = os.path.abspath("PPE.png")
+    app.setWindowIcon(QIcon(icon_path))
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
