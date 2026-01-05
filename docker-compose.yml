@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  ppe-detection-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ppe-detection-app:latest
+    container_name: ppe-app
+    environment:
+      - DISPLAY=host.docker.internal:0
+      - QT_QPA_PLATFORM=xcb
+      - QT_LOGGING_RULES=qt.qpa.xcb=false
+    volumes:
+      # Mount saved detections folder for persistence
+      - ./Saved_Detections:/app/Saved_Detections
+      # Mount .env file for environment variables
+      - ./.env:/app/.env:ro
+    stdin_open: true
+    tty: true
+    network_mode: bridge
+    
+    # Uncomment if you need webcam access (Linux only)
+    # devices:
+    #   - /dev/video0:/dev/video0
+    
+    command: python app.py
+    
+    # Health check to ensure app is running
+    healthcheck:
+      test: ["CMD", "python", "-c", "import psutil; exit(0 if any('python' in p.name().lower() for p in psutil.process_iter()) else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Optional: Add a network for future expansion
+networks:
+  default:
+    name: ppe-network
+    driver: bridge

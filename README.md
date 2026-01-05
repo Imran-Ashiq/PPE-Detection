@@ -114,26 +114,65 @@ python app.py
 
 ### Running with Docker
 
+#### Quick Start with Docker Compose (Recommended)
+
+1.  **Configure environment**:
+    ```bash
+    cp .env.example .env
+    # Edit .env with your Supabase credentials
+    ```
+
+2.  **Start the application**:
+    ```bash
+    docker-compose up --build
+    ```
+
+#### Using Helper Scripts
+
+**Windows:**
+```powershell
+.\run-docker.ps1
+```
+
+**Linux/Mac:**
+```bash
+chmod +x run-docker.sh
+./run-docker.sh
+```
+
+#### Manual Docker Build & Run
+
 1.  **Build the Docker Image**:
     ```bash
     docker build -t ppe-detection-app .
     ```
 
-2.  **Start VcXsrv (Windows X11 Server)**:
-    *   Run VcXsrv with display number 0
-    *   Disable access control
+2.  **Start VcXsrv (Windows) or XQuartz (Mac)**
 
 3.  **Run the Container**:
+    
+    **Windows:**
+    ```powershell
+    docker run -it --rm `
+      -e DISPLAY=host.docker.internal:0 `
+      -v "${PWD}\Saved_Detections:/app/Saved_Detections" `
+      -v "${PWD}\.env:/app/.env:ro" `
+      --name ppe-app `
+      ppe-detection-app python app.py
+    ```
+    
+    **Linux/Mac:**
     ```bash
     docker run -it --rm \
-      -e DISPLAY=host.docker.internal:0 \
+      -e DISPLAY=$DISPLAY \
+      -v /tmp/.X11-unix:/tmp/.X11-unix \
       -v "$(pwd)/Saved_Detections:/app/Saved_Detections" \
-      -v "$(pwd)/.env:/app/.env" \
+      -v "$(pwd)/.env:/app/.env:ro" \
       --name ppe-app \
       ppe-detection-app python app.py
     ```
 
-For detailed Docker setup instructions, see [how-to-containerize-your-project.md](how-to-containerize-your-project.md).
+For comprehensive Docker setup and troubleshooting, see [DOCKER.md](DOCKER.md).
 
 ## 📂 Project Structure
 
@@ -144,11 +183,18 @@ PPE-Detection/
 ├── auth_manager.py                     # Supabase authentication manager
 ├── requirements.txt                    # Python dependencies
 ├── Dockerfile                          # Docker configuration
+├── docker-compose.yml                  # Docker Compose configuration
+├── .dockerignore                       # Docker build exclusions
+├── .env.example                        # Environment variables template
 ├── .env                                # Environment variables (not in repo)
+├── run-docker.ps1                      # Windows Docker run script
+├── run-docker.sh                       # Linux/Mac Docker run script
+├── DOCKER.md                           # Comprehensive Docker guide
+├── how-to-containerize-your-project.md # Docker tutorial
+├── README.md                           # This file
 ├── PPE.png                             # Application logo
 ├── epoch31.pt                          # YOLOv8 Model Weights (External Download)
 ├── osnet_ain_x1_0_*.pth               # Tracking model weights
-├── how-to-containerize-your-project.md # Docker setup guide
 ├── Saved_Detections/                  # Output folder for recordings
 └── ...
 ```
@@ -167,13 +213,28 @@ Configure required PPE classes in the Violation Screen to monitor compliance.
 
 ## 🐳 Docker Deployment
 
-The application is fully containerized for easy deployment. The Docker image includes:
+The application is fully containerized for easy deployment. The Docker setup includes:
+
+*   **docker-compose.yml** - Orchestration configuration for easy deployment
+*   **Dockerfile** - Multi-stage build with optimized layers
+*   **run-docker.ps1** - Windows helper script with VcXsrv auto-start
+*   **run-docker.sh** - Linux/Mac helper script with X11 setup
+*   **.dockerignore** - Optimized build context
+*   **.env.example** - Environment variables template
+
+**What's included in the container:**
 *   Python 3.11 runtime
-*   All dependencies pre-installed
+*   All dependencies pre-installed (~1.9GB)
 *   X11 forwarding support for GUI
 *   Volume mounts for data persistence
+*   Health checks for monitoring
 
-See the included `how-to-containerize-your-project.md` for comprehensive Docker setup instructions.
+**Quick deployment:**
+```bash
+docker-compose up --build
+```
+
+See [DOCKER.md](DOCKER.md) for comprehensive Docker deployment guide including troubleshooting and production best practices.
 
 
 ## 🤝 Contributing
